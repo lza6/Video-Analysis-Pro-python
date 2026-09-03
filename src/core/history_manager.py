@@ -167,6 +167,54 @@ class HistoryManager:
         except Exception:
             return 0
 
+    # ------------------------------------------------------------------
+    # P2-8: 跨视频用户偏好记忆 (user_preferences collection)
+    # 记录用户的查询历史/关注点，让 Agent 跨会话更懂用户
+    # ------------------------------------------------------------------
+    PREFS_COLLECTION_NAME = "user_preferences"
+
+    def remember_preference(self, kind: str, content: str) -> bool:
+        """记录一条用户偏好（kind: query/interest/feedback）。"""
+        if not self.chroma_client:
+            return False
+        try:
+            from src.core.kb_indexer import get_embedder
+            embedder = get_embedder()
+            if embedder is None:
+                return False
+            collection = self.chroma_client.get_or_create_collection(
+                name=self.PREFS_COLLECTION_NAME)
+            emb = embedder.encode([content], convert_to_tensor=False)[0]
+            import time as _t
+            collection.upsert(
+                ids=[f"pref_{int(_t.time() * 1000)}"],
+                embeddings=[emb.tolist()],
+                metadatas=[{"kind": kind, "content": content[:300],
+                            "created": _t.strftime("%Y-%m-%d %H:%M:%S")}],
+                documents=[content[:1000]],
+            )
+            return True
+        except Exception as e:
+            logging.error(f"Failed to remember preference: {e}")
+            return False
+
+    def recall_preferences(self, query: str, top_k: int = 3) -> list:
+        """按语义召回相关偏好，供 Agent 个性化回答。"""
+        if not self.chroma_client:
+            return []
+        try:
+            from src.core.kb_indexer import get_embedder
+            embedder = get_embedder()
+            if embedder is None:
+                return []
+            collection = self.chroma_client.get_collection(name=self.PREFS_COLLECTION_NAME)
+            emb = embedder.encode([query], convert_to_tensor=False)[0]
+            res = collection.query(query_embeddings=[emb.tolist()], n_results=top_k)
+            return [{"content": m.get("content", ""), "kind": m.get("kind", "")}
+                    for m in res.get("metadatas", [[]])[0]]
+        except Exception:
+            return []
+
     def semantic_search_frames(self, session_id: str, query_embedding: np.ndarray, top_k: int = 5):
         if not self.chroma_client: return []
         try:

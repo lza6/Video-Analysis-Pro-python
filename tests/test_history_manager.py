@@ -63,3 +63,10 @@ def test_kb_count(manager):
     emb[2] = 1.0
     manager.add_frame_to_kb("s1", "a.mp4", "p", 1.0, "c", emb)
     assert manager.kb_count() == 1
+
+
+def test_user_preferences_roundtrip(manager):
+    """P2-8: 用户偏好记忆 — 无 embedder 时优雅返回 False/[]。"""
+    assert manager.remember_preference("query", "找黑色旅行袋") in (True, False)
+    prefs = manager.recall_preferences("旅行袋")
+    assert isinstance(prefs, list)

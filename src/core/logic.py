@@ -105,8 +105,10 @@ def videocapture_unicode(path) -> "cv2.VideoCapture":
     try:
         return cv2.VideoCapture(str(path))
     except Exception:
-        # 兜底：编码后重试（部分 OpenCV 构建支持 bytes 路径）
-        return cv2.VideoCapture(str(path).encode("utf-8"))
+        # 兜底：编码后重试（部分 OpenCV 构建支持 bytes 路径）。
+        # cv2 的 pyi 未声明 bytes 重载 → 用 cast 绕过类型检查（运行时合法）。
+        from typing import cast, Any as _Any
+        return cast("cv2.VideoCapture", cv2.VideoCapture(cast(_Any, str(path).encode("utf-8"))))
 
 # Generic Logger (Connected to UI later)
 logger = logging.getLogger("VideoAnalyzerCore")
@@ -513,6 +515,8 @@ class AudioProcessor:
     def __init__(self, vram_manager: Optional[ModelContextManager] = None):
         self.model = None
         self.vram_manager = vram_manager
+        # Whisper 模型缓存目录（与 ModelManager 共用 models/）
+        self.models_dir = Path(__file__).parent.parent.parent / "models"
 
     def extract_audio(self, video_path: Path, output_dir: Path) -> Optional[Path]:
         try:
