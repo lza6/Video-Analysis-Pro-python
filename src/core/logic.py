@@ -81,6 +81,33 @@ MEDIAINFO_AVAILABLE = _probe("pymediainfo")
 
 GPU_LOCK = threading.Lock()
 
+
+def imwrite_unicode(path: str, frame) -> bool:
+    """cv2.imwrite 对含 Unicode 的 Windows 路径不稳定，改用 imencode + tofile。
+    保持调用方签名与 cv2.imwrite 一致，便于全局替换。
+    """
+    ext = ".jpg"
+    try:
+        ok, buf = cv2.imencode(ext, frame)
+        if not ok:
+            return False
+        buf.tofile(path)
+        return True
+    except Exception as e:
+        logging.debug(f"imwrite_unicode failed for {path}: {e}")
+        return False
+
+
+def videocapture_unicode(path) -> "cv2.VideoCapture":
+    """cv2.VideoCapture 对含 Unicode 的 Windows 路径可能失败，先尝试转义。
+    若非 Windows 或路径为 ASCII，直接传 str 即可。
+    """
+    try:
+        return cv2.VideoCapture(str(path))
+    except Exception:
+        # 兜底：编码后重试（部分 OpenCV 构建支持 bytes 路径）
+        return cv2.VideoCapture(str(path).encode("utf-8"))
+
 # Generic Logger (Connected to UI later)
 logger = logging.getLogger("VideoAnalyzerCore")
 
@@ -114,28 +141,31 @@ class ModelContextManager:
 
     def request_vram(self, requesting_model: str):
         """当某个模型需要显存时，可能需要关闭其他模型。"""
-        logger.info(f"显存管理：模型 {requesting_model} 请求加载。")
-        
-        # 如果是加载 LLM，强烈建议清理本地视觉和语言模型
-        if requesting_model in ["LLM", "Whisper", "YOLO"]:
-            to_unload = [m for m in self.active_models if m != requesting_model]
-            for m in to_unload:
-                self.unload(m)
-        
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        gc.collect()
+        # 加锁：AnalysisWorker / ModelLoadWorker 多 QThread 并发访问 active_models
+        with GPU_LOCK:
+            logger.info(f"显存管理：模型 {requesting_model} 请求加载。")
+            # 如果是加载 LLM，强烈建议清理本地视觉和语言模型
+            if requesting_model in ["LLM", "Whisper", "YOLO"]:
+                to_unload = [m for m in list(self.active_models) if m != requesting_model]
+                for m in to_unload:
+                    self.unload(m)
 
-    def register(self, name: str, instance: Any):
-        self.active_models[name] = instance
-
-    def unload(self, name: str):
-        if name in self.active_models:
-            logger.info(f"显存管理：正在卸载模型 {name}")
-            del self.active_models[name]
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             gc.collect()
+
+    def register(self, name: str, instance: Any):
+        with GPU_LOCK:
+            self.active_models[name] = instance
+
+    def unload(self, name: str):
+        with GPU_LOCK:
+            if name in self.active_models:
+                logger.info(f"显存管理：正在卸载模型 {name}")
+                del self.active_models[name]
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                gc.collect()
 
 class VideoProcessor:
     def __init__(self, video_path: Path, output_dir: Path):
@@ -152,7 +182,7 @@ class VideoProcessor:
         if density <= 0: density = 0.1
         if density > 1.0: density = 1.0
         
-        cap = cv2.VideoCapture(str(self.video_path))
+        cap = videocapture_unicode(self.video_path)
         if not cap.isOpened():
             logger.error(f"无法打开视频文件: {self.video_path}")
             return []
@@ -205,7 +235,7 @@ class VideoProcessor:
         """Worker method to extract specific frames."""
         local_frames = []
         # Re-open capture in this thread
-        cap = cv2.VideoCapture(str(self.video_path))
+        cap = videocapture_unicode(self.video_path)
         if not cap.isOpened(): return []
         
         try:
@@ -216,7 +246,7 @@ class VideoProcessor:
                     timestamp = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
                     # Use unique filename with timestamp to avoid thread collision (though unlikely with different indices)
                     frame_filename = self.output_dir / f"frame_{int(frame_index)}_{timestamp:.2f}s.jpg"
-                    cv2.imwrite(str(frame_filename), frame_data)
+                    imwrite_unicode(str(frame_filename), frame_data)
                     frame_metrics = get_frame_metrics(frame_data)
                     local_frames.append(Frame(path=frame_filename, timestamp=timestamp, metrics=frame_metrics))
         finally:
@@ -259,7 +289,7 @@ class VideoProcessor:
 
     def _process_scenes_chunk(self, scenes, start_index_offset):
         local_frames = []
-        cap = cv2.VideoCapture(str(self.video_path))
+        cap = videocapture_unicode(self.video_path)
         if not cap.isOpened(): return []
         fps = cap.get(cv2.CAP_PROP_FPS)
 
@@ -285,7 +315,7 @@ class VideoProcessor:
                     
                     timestamp = middle_frame_idx / fps if fps > 0 else 0
                     frame_filename = self.output_dir / f"scene_{global_idx:03d}_{timestamp:.2f}s.jpg"
-                    cv2.imwrite(str(frame_filename), frame_data)
+                    imwrite_unicode(str(frame_filename), frame_data)
                     frame_metrics = get_frame_metrics(frame_data)
                     local_frames.append(Frame(path=frame_filename, timestamp=timestamp, metrics=frame_metrics))
         finally:
@@ -540,7 +570,9 @@ class AudioProcessor:
             
             try:
                 logger.info(f"加载 Faster-Whisper ({model_size}) on {device}...")
-                self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
+                # download_root 指向 models/ 目录，复用本地已缓存的模型，离线也可用
+                self.model = WhisperModel(model_size, device=device, compute_type=compute_type,
+                                          download_root=str(self.models_dir))
                 assert self.model is not None  # 刚赋值，帮助类型检查器收窄
 
                 # Test transcription to catch lazy-load DLL errors
@@ -928,7 +960,8 @@ class APIGatewayClient(BaseAPIClient):
 class LMStudioClient(APIGatewayClient):
     """LM Studio typically uses an OpenAI-compatible /v1 endpoint."""
     def __init__(self, base_url: str = "http://localhost:1234/v1", api_key: str = "lm-studio"):
-        super().__init__(base_url, api_key)
+        # 基类签名是 (api_key, api_url)，按位置传入，否则两者对调导致请求崩
+        super().__init__(api_key, base_url)
 
 class LocalModelClient(BaseAPIClient):
     """Client for local model files (GGUF etc). Placeholder for local inference engine."""
@@ -993,12 +1026,9 @@ class VideoAnalyzer:
             except Exception as e:
                 logging.error(f"OCR loading failed: {e}")
                 self.ocr_reader = None
-        if not CLIP_AVAILABLE:
-            try:
-                 self.embedder = SentenceTransformer('clip-ViT-B-32')
-            except Exception:
-                 pass
-    
+        # 注：self.embedder 死代码已移除。CLIP 共享实例统一走 kb_indexer.get_embedder()，
+        # 避免 5 处各自重复加载 SentenceTransformer('clip-ViT-B-32') 浪费 VRAM。
+
     def unload_models(self):
         """释放 YOLO 和 OCR 模型以减少显存占用。"""
         if self.yolo_model:

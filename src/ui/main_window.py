@@ -28,6 +28,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QPixmap
 from logging.handlers import RotatingFileHandler
 import qdarktheme
+from src.utils.theme_compat import *  # noqa: F401,F403 桥接 qdarktheme 0.1.7→2.x API（setup_theme/enable_hi_dpi）
 
 from src.core.logic import (VideoProcessor, AudioProcessor, PromptLoader,
                         ModelContextManager,
@@ -234,10 +235,18 @@ class ChatWorker(QThread):
                         if args_str.startswith("{"):
                             args = json.loads(args_str)
                         else:
-                            # Positional args logic for Action: tool(val)
-                            # This is a bit complex, let's assume JSON for schema tools
-                            args = {"query": args_str} if "search" in tool_name else {"seconds": args_str}
-                            
+                            # 按工具 schema 的首参数名解析位置参数，避免硬编码 "search"/"seconds"
+                            # 误把 create_highlights(description) / point_at_jump(query) / get_video_meta() 等传错
+                            tool = self.tool_registry._tools.get(tool_name)
+                            if tool and getattr(tool, "schema", None):
+                                first_key = next(iter(tool.schema), None)
+                                args = {first_key: args_str} if first_key else {}
+                            elif args_str:
+                                # 无 schema 的工具默认用 query
+                                args = {"query": args_str}
+                            else:
+                                args = {}
+
                         result = self.tool_registry.execute_tool_call(tool_name, args)
                         
                         tool_output_block = f"\n\nObservation: [工具返回结果]\n{result}\n"
@@ -331,10 +340,13 @@ class KBIndexWorker(QThread):
 class OllamaRefreshWorker(QThread):
     models_ready = pyqtSignal(list)
     error = pyqtSignal(str)
-    
+
     def run(self):
+        # trust_env=False：本机 Ollama 不应走系统代理，否则 localhost 被代理拦截挂起
+        session = requests.Session()
+        session.trust_env = False
         try:
-            resp = requests.get("http://localhost:11434/api/tags", timeout=2)
+            resp = session.get("http://localhost:11434/api/tags", timeout=2)
             if resp.status_code == 200:
                 data = resp.json()
                 models = [m['name'] for m in data.get('models', [])]
@@ -343,6 +355,8 @@ class OllamaRefreshWorker(QThread):
                 self.error.emit(f"HTTP {resp.status_code}")
         except Exception as e:
             self.error.emit(str(e))
+        finally:
+            session.close()
 
 class ModelLoadWorker(QThread):
     finished = pyqtSignal(object, str, str) # analyzer, model_name, error_msg
@@ -531,7 +545,8 @@ class DesktopApp(QMainWindow):
         # Stop potential background workers before the window dies, otherwise
         # Qt aborts with "QThread: Destroyed while thread is still running".
         for attr in ('worker', 'ai_worker', 'media_worker', 'chat_worker',
-                     'load_worker', 'api_check_worker', 'ollama_worker'):
+                     'load_worker', 'api_check_worker', 'ollama_worker',
+                     'kb_worker'):
             worker = getattr(self, attr, None)
             if worker is not None:
                 if hasattr(worker, 'stop'):
@@ -540,6 +555,8 @@ class DesktopApp(QMainWindow):
                     worker.wait(3000)
 
         for worker in getattr(self, '_download_workers', []):
+            if hasattr(worker, 'stop'):
+                worker.stop()
             if worker.isRunning():
                 worker.wait(3000)
 
@@ -985,6 +1002,8 @@ class DesktopApp(QMainWindow):
         try:
             from src.utils.config_manager import _secure_set
             _secure_set("api_key", self.txt_api_key.toPlainText())
+            # 成功写入密钥环后，清空 ini 里的旧明文残留，避免历史泄露面
+            self.config_manager.update_config("LastUsed", "api_key", "")
         except Exception as e:
             logging.warning(f"secure key storage fallback to ini: {e}")
             self.config_manager.update_config("LastUsed", "api_key", self.txt_api_key.toPlainText())
@@ -1515,7 +1534,7 @@ class DesktopApp(QMainWindow):
                  except Exception: pass
 
     def on_api_url_changed(self):
-        from src.core.logic import APIGatewayClient  # noqa: 用于 parse_endpoint
+        from src.core.logic import APIGatewayClient  # noqa: F401
         url = self.txt_api_url.toPlainText().strip()
         if not url:
             self.lbl_api_preview.setText("")
@@ -2307,7 +2326,7 @@ def run_main():
     try:
         import qdarktheme
         from PyQt6.QtWidgets import QApplication
-        
+
         qdarktheme.enable_hi_dpi()
         app = QApplication(sys.argv)
         qdarktheme.setup_theme("dark")

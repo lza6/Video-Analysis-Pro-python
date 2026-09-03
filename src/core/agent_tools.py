@@ -88,30 +88,31 @@ def create_get_frame_details_tool(app_context_getter):
             try:
                 import cv2
                 from pathlib import Path
-                
-                cap = cv2.VideoCapture(str(app.video_path))
+                from src.core.logic import videocapture_unicode, imwrite_unicode
+
+                cap = videocapture_unicode(app.video_path)
                 if not cap.isOpened():
                     return f"Error: Could not open video file {app.video_path.name}"
-                
+
                 fps = cap.get(cv2.CAP_PROP_FPS)
                 if fps <= 0: fps = 25.0 # Fallback
-                
+
                 frame_idx = int(seconds * fps)
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
                 ret, frame = cap.read()
-                
+
                 # Get actual timestamp for accuracy
                 actual_ts = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
                 cap.release()
-                
+
                 if ret:
                     # Save to a subfolder in output_dir
                     out_dir = Path(app.output_dir) / "agent_dynamic_extracts" if hasattr(app, 'output_dir') and app.output_dir else Path("tmp") / "agent_extracts"
                     out_dir.mkdir(parents=True, exist_ok=True)
-                    
+
                     filename = f"dynamic_{actual_ts:.2f}s.jpg"
                     save_path = out_dir / filename
-                    cv2.imwrite(str(save_path), frame)
+                    imwrite_unicode(str(save_path), frame)
                     
                     return json.dumps({
                         "timestamp": round(actual_ts, 2),
@@ -221,25 +222,37 @@ def create_highlight_cut_tool(app_context_getter):
             output_path = app.output_dir / "highlights.mp4"
 
             video = VideoFileClip(str(app.video_path))
-            
-            # Simplified: Use first 3 keyframes with content
+
+            # 诚实实现：按 description 做轻量语义匹配（非"AI 智能挑选"的过誉宣传）。
+            # 对每帧 vision_content 与 description 做关键词/词频粗匹配，取 top-3 命中片段。
+            # 之前硬编码前 3 帧 [:3] 忽略 description，被 PRD 标记为 P1-3 待修复。
             segments = []
-            if hasattr(app, 'frames'):
-                 valid_frames = [f for f in app.frames if f.vision_content][:3]
-                 for f in valid_frames:
-                     start = max(0, f.timestamp - 2)
-                     end = min(video.duration, f.timestamp + 2)
-                     segments.append(video.subclipped(start, end))
-            
+            if hasattr(app, 'frames') and app.frames:
+                desc_tokens = set(description or "")
+                scored = []
+                for f in app.frames:
+                    if not f.vision_content:
+                        continue
+                    # 极简词频打分：description 出现的字符在 vision_content 中的命中数
+                    content = f.vision_content or ""
+                    score = sum(1 for ch in description if ch in content) if description else 0
+                    scored.append((score, f))
+                scored.sort(key=lambda x: x[0], reverse=True)
+                for _, f in scored[:3]:
+                    start = max(0, f.timestamp - 2)
+                    end = min(video.duration, f.timestamp + 2)
+                    if end > start:
+                        segments.append(video.subclipped(start, end))
+
             if not segments:
                 video.close()
                 return "未找到足够的相关片段进行剪辑。"
-            
+
             final_clip = concatenate_videoclips(segments)
             final_clip.write_videofile(str(output_path), codec="libx264")
             final_clip.close()
             video.close()
-            
+
             return f"集锦视频生成成功：{output_path.name}"
         except Exception as e:
             return f"剪辑出错: {e}"

@@ -18,7 +18,6 @@ venv/
 # Runtime artifacts
 logs/
 cache/
-软产生的缓存/
 crash_log.txt
 crash_debug.txt
 
@@ -37,5 +36,12 @@ config/history.db
 config/chroma_db/
 config/app_config.ini
 
-# website/ 是独立的前端项目，不属于 Python 桌面应用仓库
-website/
+# website/ 官网源码 —— 作为本仓库的一部分纳入版本控制，
+# 以便 clone 者能拿到完整 Next.js 源码（之前被排除导致 README 截图外无源码交付）。
+# 仅排除其构建产物与 node_modules。
+website/node_modules/
+website/.next/
+website/out/
+website/.env*.local
+.env
+E2E实测结果/

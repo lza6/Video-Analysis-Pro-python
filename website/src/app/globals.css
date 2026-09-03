@@ -1,0 +1,213 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   玻璃拟态 2.0 设计 Token — 深色墨蓝底 + 青/紫极光点缀（oklch）
+   文本对比度基线：正文 ≥ 7:1，次级 ≥ 4.6:1，accent 大字 ≥ 8:1（WCAG AA/AAA）
+--------------------------------------------------------------------------- */
+@theme inline {
+  --color-ink: oklch(0.16 0.028 265);
+  --color-ink-2: oklch(0.21 0.035 268);
+  --color-ink-3: oklch(0.27 0.04 270);
+  --color-accent: oklch(0.8 0.12 205);
+  --color-accent-2: oklch(0.68 0.19 295);
+  --color-accent-3: oklch(0.75 0.15 340);
+  --color-mist: oklch(0.9 0.012 260);
+  --color-mute: oklch(0.72 0.02 260);
+
+  --font-sans: var(--font-noto), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jb), ui-monospace, "Cascadia Mono", monospace;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--color-ink);
+  color: var(--color-mist);
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+}
+
+::selection {
+  background: oklch(0.68 0.19 295 / 0.45);
+  color: white;
+}
+
+/* 统一 focus ring（设计过的，不是浏览器默认） */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+/* ---------------------------- 玻璃层 ---------------------------- */
+
+.glass {
+  background: linear-gradient(
+    135deg,
+    oklch(1 0 0 / 0.09),
+    oklch(1 0 0 / 0.035)
+  );
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid oklch(1 0 0 / 0.12);
+  box-shadow:
+    0 1px 0 0 oklch(1 0 0 / 0.1) inset,
+    0 20px 50px -20px oklch(0 0 0 / 0.5);
+}
+
+.glass-strong {
+  background: linear-gradient(
+    135deg,
+    oklch(1 0 0 / 0.14),
+    oklch(1 0 0 / 0.05)
+  );
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  backdrop-filter: blur(28px) saturate(160%);
+  border: 1px solid oklch(1 0 0 / 0.16);
+  box-shadow:
+    0 1px 0 0 oklch(1 0 0 / 0.14) inset,
+    0 30px 70px -25px oklch(0 0 0 / 0.6);
+}
+
+.glass-chip {
+  background: oklch(1 0 0 / 0.06);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  border: 1px solid oklch(1 0 0 / 0.12);
+}
+
+.glass-hover {
+  transition:
+    transform 300ms var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1)),
+    border-color 300ms,
+    box-shadow 300ms;
+}
+
+.glass-hover:hover {
+  transform: translateY(-4px);
+  border-color: oklch(1 0 0 / 0.24);
+  box-shadow:
+    0 1px 0 0 oklch(1 0 0 / 0.14) inset,
+    0 30px 60px -20px oklch(0.68 0.19 295 / 0.25);
+}
+
+/* 顶部高光描边 — 玻璃质感的"棱边" */
+.glass-edge {
+  position: relative;
+}
+.glass-edge::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    160deg,
+    oklch(1 0 0 / 0.35),
+    oklch(1 0 0 / 0.04) 40%,
+    transparent 70%
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* ------------------------- 极光氛围背景 ------------------------- */
+
+.aurora {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(90px);
+  pointer-events: none;
+  will-change: transform;
+}
+
+@keyframes drift-a {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(6vw, 4vh, 0) scale(1.15);
+  }
+}
+
+@keyframes drift-b {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1.05);
+  }
+  50% {
+    transform: translate3d(-7vw, -3vh, 0) scale(0.92);
+  }
+}
+
+@keyframes floaty {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes pulse-glow {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* 细颗粒噪点 — 给大面积深色加"物理感" */
+.grain::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* 渐变文字 */
+.text-gradient {
+  background: linear-gradient(
+    100deg,
+    var(--color-accent) 10%,
+    var(--color-accent-2) 55%,
+    var(--color-accent-3) 90%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ------------------------- 动效降级 ------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .aurora {
+    animation: none !important;
+  }
+}

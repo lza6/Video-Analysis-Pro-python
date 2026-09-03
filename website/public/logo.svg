@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#151726"/>
+      <stop offset="0.5" stop-color="#1d1f3a"/>
+      <stop offset="1" stop-color="#2a1f4a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="40" y1="40" x2="216" y2="216" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7dd3fc"/>
+      <stop offset="0.55" stop-color="#a78bfa"/>
+      <stop offset="1" stop-color="#f0abfc"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop stop-color="#7dd3fc" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#7dd3fc" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- 圆角底 -->
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+
+  <!-- 光晕 -->
+  <circle cx="128" cy="128" r="90" fill="url(#glow)"/>
+
+  <!-- 播放键外环（代表"视频"） -->
+  <circle cx="128" cy="128" r="68" fill="none" stroke="url(#accent)" stroke-width="4" opacity="0.9"/>
+
+  <!-- 内部播放三角 -->
+  <path d="M112 96 L168 128 L112 160 Z" fill="url(#accent)"/>
+
+  <!-- 轨道环（代表"AI 分析"的仪器感） -->
+  <ellipse cx="128" cy="128" rx="92" ry="38" fill="none" stroke="#7dd3fc" stroke-width="2" opacity="0.45" transform="rotate(-25 128 128)"/>
+  <ellipse cx="128" cy="128" rx="92" ry="38" fill="none" stroke="#a78bfa" stroke-width="2" opacity="0.35" transform="rotate(25 128 128)"/>
+
+  <!-- 轨道上的粒子点 -->
+  <circle cx="60" cy="108" r="4" fill="#7dd3fc"/>
+  <circle cx="196" cy="148" r="4" fill="#a78bfa"/>
+  <circle cx="148" cy="56" r="3" fill="#f0abfc"/>
+</svg>

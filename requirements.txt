@@ -1,37 +1,40 @@
 # ============================================================================
-# Video Analysis Pro - Core Dependencies (Python 3.10 - 3.12)
+# Video Analysis Pro - Core Dependencies (Python 3.10 - 3.13)
 # 分层说明:
 #   core  = 本文件（应用启动与主功能的最小依赖集）
 #   ocr   = pip install -r requirements-ocr.txt   (PaddleOCR 文字识别，体积大)
 #   全量  = ocr 已含其余可选依赖
+# 注：pyqtdarktheme 2.x 在部分 Python 版本（3.13+/部分 wheel）无可装发布，
+#     生产代码通过 src/utils/theme_compat.py 桥接 0.1.7 与 2.x API，故放宽下界。
 # ============================================================================
 
 # --- GUI ---
 PyQt6>=6.6.0
-pyqtdarktheme>=2.1.0
+pyqtdarktheme>=0.1.7,<3          # theme_compat 桥接，0.1.7 起即可
 
 # --- Video / CV core ---
 opencv-python-headless>=4.8.0
 numpy>=1.24,<2.3
 scenedetect>=0.6.2
-ultralytics>=8.0.0
-moviepy>=2.0          # 代码已迁移到 moviepy 2.x API (subclipped/resized)
-imageio-ffmpeg        # 自带 FFmpeg 二进制，实现 FFmpeg 自给自足
+ultralytics>=8.3.0               # YOLOv11 需要 8.3+
+moviepy>=2.0                     # 代码已迁移到 moviepy 2.x API (subclipped/resized)
+imageio-ffmpeg                   # 自带 FFmpeg 二进制，实现 FFmpeg 自给自足
+pillow>=12.3.0                   # 12.x 修复多个图像解析 CVE (PYSEC-2026-165 等)
 
 # --- AI core ---
 torch>=2.2
 faster-whisper>=1.0.0
-sentence-transformers>=2.3.0   # 2.2.2 与新版 huggingface_hub 不兼容
+sentence-transformers>=2.3.0     # 2.2.2 与新版 huggingface_hub 不兼容
+keyring>=24.0.0                  # API Key OS 密钥环存储 (DPAPI/Keychain)，否则降级明文 ini
 
 # --- Persistence / utils ---
-chromadb>=1.5.9     # CVE-2026-45830/31/33 已修复
+chromadb>=1.5.9                  # CVE-2026-45830/31/33 已修复
 markdown2
 requests
 psutil
 pymediainfo
-pydub                  # 静音检测 + 波形提取（缺失时会静默降级）
-pillow>=12.3.0      # 12.x 修复多个图像解析 CVE (PYSEC-2026-165 等)
-nvidia-ml-py           # NVIDIA GPU 监控；无 GPU 时自动跳过
+pydub                            # 静音检测 + 波形提取（缺失时会静默降级）
+nvidia-ml-py                     # NVIDIA GPU 监控；无 GPU 时自动跳过
 
 # --- Agent tools (web search) ---
 duckduckgo-search

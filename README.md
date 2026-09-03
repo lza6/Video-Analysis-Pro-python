@@ -13,6 +13,59 @@
 
 ---
 
+## 🖼️ 软件界面预览 (UI Preview)
+
+### 桌面端 · 主界面概览
+
+<p align="center">
+  <img src="docs/screenshots/desktop/desktop-overview.png" alt="Video Analysis Pro 桌面端主界面" width="860"/>
+</p>
+
+> 基于 PyQt6 的深色主题 GUI——左侧数据提取区、中央多 Tab 工作区、右侧 Agent 智能助手面板，三栏布局逻辑清晰。
+
+### 桌面端 · 各功能 Tab 详图
+
+<table>
+<tr>
+<td align="center"><b>📝 AI 摘要报告</b></td>
+<td align="center"><b>🖼️ 关键帧画廊</b></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/desktop/desktop-tab-report.png" alt="AI 摘要报告 Tab"/></td>
+<td><img src="docs/screenshots/desktop/desktop-tab-gallery.png" alt="关键帧画廊 Tab"/></td>
+</tr>
+<tr>
+<td align="center"><b>🎬 摘要媒体 (GIF/Clips)</b></td>
+<td align="center"><b>📊 元数据与画质</b></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/desktop/desktop-tab-media.png" alt="摘要媒体 Tab"/></td>
+<td><img src="docs/screenshots/desktop/desktop-tab-metrics.png" alt="元数据与画质 Tab"/></td>
+</tr>
+<tr>
+<td align="center"><b>📜 系统日志</b></td>
+<td align="center"><b>📦 模型管理</b></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/desktop/desktop-tab-logs.png" alt="系统日志 Tab"/></td>
+<td><img src="docs/screenshots/desktop/desktop-tab-models.png" alt="模型管理 Tab"/></td>
+</tr>
+</table>
+
+### 官网落地页（玻璃拟态 2.0 · Next.js + Motion + R3F）
+
+<p align="center">
+  <img src="docs/screenshots/opt/section-hero.png" alt="官网 Hero 首屏" width="860"/>
+</p>
+
+> 官网采用玻璃拟态 2.0 风格，Hero 区内置 3D 透射晶体 + 粒子场 + 指针视差，动效全程支持 `prefers-reduced-motion` 降级。完整 UI 展示见 [UI-展示.md](./UI-展示.md)。
+
+<p align="center">
+  <img src="docs/screenshots/opt/section-features.png" alt="官网功能区" width="860"/>
+</p>
+
+---
+
 ## 📖 目录 (Table of Contents)
 
 1. [项目简介与哲学](#-项目简介与哲学-philosophy)
@@ -25,6 +78,10 @@
 8. [开发者蓝图与扩展](#-开发者蓝图与扩展-developer-blueprint)
 9. [未来展望与待办](#-未来展望与待办-roadmap)
 10. [开源协议](#-开源协议-license)
+
+---
+
+## 🖼️ 软件界面预览 (UI Preview)
 
 ---
 

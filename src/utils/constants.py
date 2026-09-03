@@ -61,7 +61,7 @@ REQUIRED_PACKAGES = [
 # Paths
 CONFIG_DIR = "config"
 LOG_DIR = "logs"
-CACHE_DIR = "软产生的缓存"  # Central folder for all generated resources
+CACHE_DIR = "cache"  # Central folder for all generated resources（ASCII，规避 cv2 中文路径问题）
 MAIN_CONFIG_FILENAME = "app_config.ini"
 PROVIDERS_FILENAME = "providers.json"
 TASK_STATES_FILENAME = "task_states.json"

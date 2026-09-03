@@ -72,7 +72,7 @@ class ConfigurationManager:
         }
         self.config["LastUsed"] = {
             "client_type": "1",
-            "api_url": "https://api.iflow.cn/v1",
+            "api_url": "",   # 中立默认：用户自行填入（OpenAI / DeepSeek / 自建网关等）
             "api_key": "",
             "model_name": ""
         }

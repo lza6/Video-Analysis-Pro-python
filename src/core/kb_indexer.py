@@ -54,13 +54,20 @@ def index_frames(history_manager, session_id: str, video_name: str,
     for start in range(0, len(frames), batch_size):
         chunk = frames[start:start + batch_size]
         try:
-            # SentenceTransformer 只接受 str / PIL.Image / np.ndarray；
-            # Frame.path 是 Path，必须转成 str，否则 encode 抛
-            # "Unsupported input type: WindowsPath"。
-            embeddings = embedder.encode(
-                [str(f.path) for f in chunk],
-                convert_to_tensor=False,
-            )
+            # 关键修复：用 PIL.Image 加载帧图像做视觉 embedding，而不是编码路径字符串。
+            # 之前 [str(f.path) for f in chunk] 让 SentenceTransformer 走文本编码器，
+            # 编码的是路径文本本身，导致跨视频视觉搜索 100% 返回垃圾结果。
+            from PIL import Image
+            images = []
+            for f in chunk:
+                try:
+                    img = Image.open(str(f.path)).convert("RGB")
+                    images.append(img)
+                except Exception as open_err:
+                    logger.warning(f"KB indexer: 跳过无法打开的帧 {f.path}: {open_err}")
+                    # 用占位图维持 zip 对齐（embedding 会被丢弃）
+                    images.append(Image.new("RGB", (224, 224), (0, 0, 0)))
+            embeddings = embedder.encode(images, convert_to_tensor=False)
         except Exception as e:
             logger.error(f"KB indexer: batch encode failed: {e}")
             continue

@@ -1,0 +1,5 @@
+# 借助 next-sitemap 的约定，也可直接放静态文件
+User-agent: *
+Allow: /
+
+Sitemap: https://video-analysis-pro.example.com/sitemap.xml
