@@ -228,7 +228,6 @@ def create_highlight_cut_tool(app_context_getter):
             # 之前硬编码前 3 帧 [:3] 忽略 description，被 PRD 标记为 P1-3 待修复。
             segments = []
             if hasattr(app, 'frames') and app.frames:
-                desc_tokens = set(description or "")
                 scored = []
                 for f in app.frames:
                     if not f.vision_content:

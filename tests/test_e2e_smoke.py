@@ -16,6 +16,7 @@ except OSError:
 
 from PyQt6.QtWidgets import QApplication
 import qdarktheme
+from src.utils import theme_compat  # noqa: F401 桥接 qdarktheme 0.1.7→2.x API
 qdarktheme.enable_hi_dpi()
 app = QApplication(sys.argv)
 qdarktheme.setup_theme("dark")

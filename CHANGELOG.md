@@ -1,5 +1,50 @@
 # Changelog — Video Analysis Pro
 
+## [Unreleased] — 2026-09-04 · 终局闭环审计
+
+### 🐛 关键修复（P0 阻塞）
+- **生产启动崩溃**：`qdarktheme.setup_theme`/`enable_hi_dpi` 在 pyqtdarktheme 0.1.7 上不存在，
+  新增 `src/utils/theme_compat.py` 桥接 0.1.7 与 2.x API；requirements.txt 放宽到 `>=0.1.7,<3`；
+  `main_window.py` / `tests/test_e2e_smoke.py` / `capture_desktop_ui.py` 同步引入。E2E 冒烟由红转绿。
+- **跨视频知识库语义搜索完全失效**：`kb_indexer.py` 原把路径字符串当文本 embedding（不是图像），
+  导致 `search_kb` 100% 返回垃圾结果。改用 `PIL.Image` 真实图像 embedding。
+
+### 🐛 高优先级修复（P1）
+- **LMStudioClient 构造参数对调**：`api_key` 与 `api_url` 传反，请求崩。
+- **Whisper download_root**：复用本地缓存，离线环境不再误报"whisper_base 已下载"却联网。
+- **ModelContextManager 并发竞态**：`request_vram`/`register`/`unload` 全部加 `GPU_LOCK`，
+  修复多 QThread 下 `dictionary changed size during iteration`。
+- **OllamaRefreshWorker 代理挂起**：localhost 请求走系统代理被拦截，改 `Session(trust_env=False)`。
+- **Agent 工具参数解析硬编码**：4 个工具拿到错误参数名（TypeError），改为按 schema 首参数名解析。
+- **closeEvent 漏 kb_worker**：关窗时 KB 索引在跑触发 "QThread destroyed while running"，已补。
+- **save_current_settings 密钥环迁移不清空 ini**：成功写入 keyring 后清空 ini 旧明文残留。
+- **cv2 中文路径静默失败**：新增 `imwrite_unicode`/`videocapture_unicode`，全量替换 logic.py /
+  agent_tools.py / surveillance_agent.py 中的 `cv2.imwrite(str(...))` / `VideoCapture(str(...))`。
+- **surveillance cut_clip total=0 永不裁剪**：监控视频读不到 frame count 时兜底。
+- **highlight_cut 硬编码前 3 帧**：改为按 description 词频打分取 top-3（诚实实现，去伪宣传）。
+- **VideoAnalyzer.embedder 死代码**：移除，CLIP 统一走 `kb_indexer.get_embedder()` 共享单例。
+
+### 🔒 安全
+- `config_manager.py` 默认 `api_url` 去硬编码商业代理（`api.iflow.cn`），改中立空值。
+- `requirements.txt` 新增 `keyring>=24.0.0`（API Key OS 密钥环存储依赖，此前遗漏导致降级明文 ini）。
+
+### 🎨 官网修复
+- **reduced-motion 死代码**：Hero/Stats/Download 三处 `prefersReduced=false` 硬编码 →
+  全部改 `useReducedMotion()` 真调用，偏好减少动效用户不再被全速动画轰炸。
+- **HeroVisual WebGL 假兜底**：`onError` 对 div 不触发 → 改 ErrorBoundary + WebGL 预检。
+- **HeroScene pointer 死代码**：移除 `pointerEvents:none` + pointer 耦合，保留时间自转。
+- **metadataBase 占位域名**：`.example.com` → `process.env.NEXT_PUBLIC_SITE_URL ?? localhost`；
+  JSON-LD url 改真实 GitHub 仓库。
+- **Download macOS 空图标**：补 🍎。
+- **Stats "7类"→"9类"**：与 agent_tools.py 9 工具对齐。
+- **website 解除 gitignore**：官网源码纳入版本控制（仅排除 node_modules/.next）。
+
+### 📐 工程
+- 新增 `SPEC.md`（结构化规范）+ `workflow_status.md`（终局审计进度）。
+- 新增 `src/utils/theme_compat.py`。
+- 新增 `website/src/components/ErrorBoundary.tsx`。
+- `.gitignore`：`CACHE_DIR` 由中文"软产生的缓存"改 ASCII "cache"；移除 `website/` 整体排除。
+
 ## [4.5.0] — 2026-09-03
 
 ### 🎉 重大更新
