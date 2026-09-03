@@ -36,3 +36,6 @@ node_modules/
 config/history.db
 config/chroma_db/
 config/app_config.ini
+
+# website/ 是独立的前端项目，不属于 Python 桌面应用仓库
+website/
