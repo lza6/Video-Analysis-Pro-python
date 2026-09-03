@@ -26,8 +26,8 @@ from src.utils.constants import (
     THEMES, REQUIRED_PACKAGES, CONFIG_DIR, LOG_DIR, MAIN_CONFIG_FILENAME
 )
 
-# --- 应用版本 (Application Version) ---
-APP_VERSION = "v4.0.0"
+# --- 应用版本 (single source of truth: src/utils/constants.py) ---
+from src.utils.constants import APP_VERSION
 
 # =====================================================================================
 # 辅助函数和工具 (Helper Functions & Utilities)
@@ -197,6 +197,21 @@ def cleanup_environment_and_config(configured_venv_path: str, reason: str = ""):
 _setup_master_root_instance = None
 
 if __name__ == "__main__":
+    # --- Python 版本门禁 ---
+    # paddlepaddle 等 AI 依赖在 3.13+ 没有预编译 wheel；历史行为是把依赖装到
+    # 任意系统 Python 上然后在运行中失败。这里在最早时刻拦截并给出可行动提示。
+    if not (3, 10) <= sys.version_info[:2] < (3, 13):
+        _err_root = tk.Tk(); _err_root.withdraw()
+        messagebox.showerror(
+            "Python 版本不受支持",
+            f"当前 Python 版本为 {sys.version_info.major}.{sys.version_info.minor}，"
+            f"本软件需要 Python 3.10 / 3.11 / 3.12。\n\n"
+            f"请安装受支持版本后重试:\n"
+            f"https://www.python.org/downloads/release/python-31011/"
+        )
+        if _err_root.winfo_exists(): _err_root.destroy()
+        sys.exit(1)
+
     # 确保日志和配置目录存在
     os.makedirs(CONFIG_DIR, exist_ok=True)
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -278,11 +293,18 @@ if __name__ == "__main__":
                                  sys.exit(p.returncode)
 
                         else:
-                             logging.warning("未找到桌面应用文件。回退到 Gradio 应用。")
-                             p = subprocess.Popen([sys.executable, "app.py"])
-                             p.wait()
-                             sys.exit(p.returncode)
-                        
+                             # 历史 bug: 回退到不存在的 app.py（Gradio 版已删除）会崩溃。
+                             # 现在明确报错并提示，而非静默尝试。
+                             logging.critical("未找到桌面应用入口 src/ui/main_window.py")
+                             root_err = tk.Tk(); root_err.withdraw()
+                             messagebox.showerror(
+                                 "启动失败",
+                                 "未找到桌面应用入口 src/ui/main_window.py。\n"
+                                 "请确认从项目根目录运行 launcher.py，且源码完整。"
+                             )
+                             if root_err.winfo_exists(): root_err.destroy()
+                             sys.exit(1)
+
                         needs_full_setup = False
                         sys.exit(0)
                         

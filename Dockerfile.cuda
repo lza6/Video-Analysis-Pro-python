@@ -1,0 +1,33 @@
+# Video Analysis Pro — CUDA (GPU) 分析镜像
+# 构建: docker build -f Dockerfile.cuda -t video-analysis-pro:cuda .
+# 运行: docker run --gpus all -p 8000:8000 video-analysis-pro:cuda
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
+
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 VAP_PORT=8000
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3.10 python3.10-venv python3-pip ffmpeg libglib2.0-0 libgl1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python
+
+WORKDIR /app
+RUN python -m pip install --no-cache-dir pip --upgrade
+
+COPY requirements.txt requirements-ocr.txt ./
+# cuBLAS/cuDNN for faster-whisper (官方清单)
+RUN pip install --no-cache-dir \
+        torch --index-url https://download.pytorch.org/whl/cu121 \
+    && pip install --no-cache-dir \
+        nvidia-cublas-cu12 nvidia-cudnn-cu12==9.* \
+        numpy opencv-python-headless scenedetect ultralytics \
+        moviepy imageio-ffmpeg faster-whisper sentence-transformers \
+        chromadb markdown2 requests psutil pymediainfo pydub pillow \
+        nvidia-ml-py duckduckgo-search \
+    || true
+
+COPY src ./src
+COPY config ./config
+COPY launcher.py ./
+
+EXPOSE 8000
+CMD ["python", "-m", "src.server.headless"]

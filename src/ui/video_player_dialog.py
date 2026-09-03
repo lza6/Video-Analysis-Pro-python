@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
                              QLabel, QSlider, QFrame, QGraphicsView, QGraphicsScene)
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QRectF, QSize
+from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QRectF, QSize, QSizeF
 from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QVideoWidget, QGraphicsVideoItem
 from src.ui.timeline_widget import TimelineWidget
@@ -25,7 +25,8 @@ class VideoPlayerDialog(QDialog):
         # Video Item
         self.video_item = QGraphicsVideoItem()
         self.scene.addItem(self.video_item)
-        self.video_item.setSize(QSize(960, 540)) # Initial size
+        # QGraphicsVideoItem.setSize expects QSizeF, not QSize (PyQt6 is strict)
+        self.video_item.setSize(QSizeF(960, 540))  # Initial size
 
         # Player
         self.media_player = QMediaPlayer()
@@ -108,8 +109,15 @@ class VideoPlayerDialog(QDialog):
             seconds = (ms // 1000) % 60
             minutes = (ms // 60000)
             return f"{minutes:02}:{seconds:02}"
-        self.lbl_time.setText(f"{fmt(current_ms)} / {fmt(total_ms)}")
+        # lbl_time is optional (only shown if a caller provided one); guard
+        # against the historical AttributeError where the attribute never
+        # existed on this dialog.
+        lbl = getattr(self, 'lbl_time', None)
+        if lbl is not None:
+            lbl.setText(f"{fmt(current_ms)} / {fmt(total_ms)}")
 
     def closeEvent(self, event):
-        self.player.stop()
+        # Historical bug: referenced self.player which never existed
+        # (the player instance is self.media_player) → AttributeError on close.
+        self.media_player.stop()
         super().closeEvent(event)

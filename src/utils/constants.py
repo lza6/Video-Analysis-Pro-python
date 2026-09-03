@@ -4,7 +4,7 @@ import os
 
 # Application Info
 APP_NAME = "Video Analysis Pro"
-APP_VERSION = "4.0.0"
+APP_VERSION = "4.5.0"
 
 # Environment
 VENV_SUBDIR_NAME = "venv"
@@ -39,20 +39,24 @@ THEMES = {
     }
 }
 
-# Dependencies to check/install
+# Dependencies checked by the launcher import-verification script.
+# Mirrors requirements.txt (keep in sync).
 REQUIRED_PACKAGES = [
     "PyQt6>=6.6.0",
     "pyqtdarktheme>=2.1.0",
     "opencv-python-headless>=4.8.0",
+    "numpy",
     "scenedetect>=0.6.2",
     "ultralytics>=8.0.0",
-    "sentence-transformers>=2.2.2",
-
+    "torch",
+    "faster-whisper>=1.0.0",
+    "sentence-transformers>=2.3.0",
+    "chromadb",
     "markdown2",
-    "numpy",
     "requests",
-    "gradio", # Kept for backward compatibility if needed, or remove if fully migrating
-    "moviepy"
+    "psutil",
+    "moviepy",
+    "imageio-ffmpeg",
 ]
 
 # Paths

@@ -17,6 +17,7 @@ except ImportError:
 class HistoryManager:
     def __init__(self, config_dir: str):
         self.config_dir = Path(config_dir)
+        self.config_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.config_dir / "history.db"
         self._init_db()
         self.chroma_client = None
@@ -73,7 +74,7 @@ class HistoryManager:
     def add_frame_to_memory(self, session_id: str, timestamp: float, content: str, embedding: np.ndarray):
         """将帧信息存入 ChromaDB 以后续进行毫秒级语义搜索。"""
         if not self.chroma_client: return
-        
+
         try:
             collection = self.chroma_client.get_or_create_collection(name=f"session_{session_id}")
             collection.add(
@@ -84,6 +85,89 @@ class HistoryManager:
             )
         except Exception as e:
             logging.error(f"Failed to add to ChromaDB: {e}")
+
+    # ------------------------------------------------------------------
+    # v4.5 跨视频知识库 (Global Knowledge Base)
+    # 单一会话级 collection 之上新增一个全局 collection，使语义搜索可以
+    # 跨越所有已分析的视频（"帮我找找过去一年所有视频里出现过的红色跑车"）。
+    # 复用同一个 PersistentClient，不引入新的向量库。
+    # ------------------------------------------------------------------
+    KB_COLLECTION_NAME = "kb_frames"
+
+    def add_frame_to_kb(self, session_id: str, video_name: str, video_path: str,
+                        timestamp: float, content: str, embedding: np.ndarray,
+                        ocr_text: str = "") -> bool:
+        """把一帧写入全局知识库，metadata 携带会话与视频信息用于跳转与清理。"""
+        if not self.chroma_client:
+            return False
+        try:
+            collection = self.chroma_client.get_or_create_collection(name=self.KB_COLLECTION_NAME)
+            frame_id = f"{session_id}_{timestamp:.3f}"
+            # upsert 防止重复分析同一视频时 id 冲突
+            collection.upsert(
+                ids=[frame_id],
+                embeddings=[embedding.tolist()],
+                metadatas=[{
+                    "session_id": session_id,
+                    "video_name": video_name,
+                    "video_path": video_path,
+                    "timestamp": float(timestamp),
+                    "content": (content or "")[:500],
+                    "ocr_text": (ocr_text or "")[:500],
+                }],
+                documents=[(content or "")[:1000]],
+            )
+            return True
+        except Exception as e:
+            logging.error(f"Failed to add frame to KB: {e}")
+            return False
+
+    def search_kb(self, query_embedding: np.ndarray, top_k: int = 8,
+                  min_score: float = 0.25) -> list:
+        """跨视频语义搜索。返回 [{video_name, video_path, timestamp, score, content}]"""
+        if not self.chroma_client:
+            return []
+        try:
+            collection = self.chroma_client.get_collection(name=self.KB_COLLECTION_NAME)
+        except Exception:
+            return []  # 知识库为空（尚未建立）属正常场景
+        try:
+            results = collection.query(
+                query_embeddings=[query_embedding.tolist()],
+                n_results=top_k,
+                include=["metadatas", "distances"],
+            )
+        except Exception as e:
+            logging.error(f"KB search failed: {e}")
+            return []
+
+        hits = []
+        metadatas = results.get("metadatas", [[]])[0]
+        distances = results.get("distances", [[]])[0]
+        for meta, dist in zip(metadatas, distances):
+            # ChromaDB 默认返回 L2 距离；转换为 0-1 相似度供 UI 展示
+            score = max(0.0, 1.0 - float(dist) / 2.0)
+            if score < min_score:
+                continue
+            hits.append({
+                "video_name": meta.get("video_name", "Unknown"),
+                "video_path": meta.get("video_path", ""),
+                "session_id": meta.get("session_id", ""),
+                "timestamp": float(meta.get("timestamp", 0.0)),
+                "score": round(score, 3),
+                "content": meta.get("content", ""),
+            })
+        return hits
+
+    def kb_count(self) -> int:
+        """知识库当前条目数（UI 展示用）。"""
+        if not self.chroma_client:
+            return 0
+        try:
+            collection = self.chroma_client.get_collection(name=self.KB_COLLECTION_NAME)
+            return collection.count()
+        except Exception:
+            return 0
 
     def semantic_search_frames(self, session_id: str, query_embedding: np.ndarray, top_k: int = 5):
         if not self.chroma_client: return []
@@ -98,8 +182,12 @@ class HistoryManager:
             return []
 
     def add_session(self, video_path: str, output_dir: str, summary: str = "", status: str = 'completed'):
-        session_id = str(int(time.time()))
-        timestamp = datetime.now().isoformat()
+        # Historical bug: seconds-resolution timestamps collided when two
+        # sessions were created within the same second (PRIMARY KEY conflict).
+        # A uuid has no such constraint.
+        import uuid
+        session_id = uuid.uuid4().hex
+        timestamp = datetime.utcnow().isoformat()
         video_name = Path(video_path).name
         
         with sqlite3.connect(self.db_path) as conn:
@@ -125,27 +213,40 @@ class HistoryManager:
             return [dict(row) for row in cursor.fetchall()]
 
     def delete_session(self, session_id: str):
+        # Historical bug: the KB cleanup sat inside `if row:` — a session that
+        # had KB entries but no row in `sessions` (or an already-deleted row)
+        # short-circuited and left orphan vectors behind. Chroma cleanup now
+        # runs unconditionally, and the function returns True if anything was
+        # actually removed.
+        deleted_something = False
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT output_dir FROM sessions WHERE id = ?", (session_id,))
             row = cursor.fetchone()
             if row:
+                deleted_something = True
                 out_dir = Path(row[0])
                 if out_dir.exists() and out_dir.is_dir():
                     try:
                         shutil.rmtree(out_dir)
                     except: pass
-                
-                # Cleanup Chroma
-                if self.chroma_client:
-                    try: self.chroma_client.delete_collection(name=f"session_{session_id}")
-                    except: pass
-                
+
                 cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
                 cursor.execute("DELETE FROM checkpoints WHERE session_id = ?", (session_id,))
                 conn.commit()
-                return True
-        return False
+
+            # Cleanup Chroma: per-session collection + KB entries belonging
+            # to this session (so cross-video search never shows ghosts).
+            if self.chroma_client:
+                try: self.chroma_client.delete_collection(name=f"session_{session_id}")
+                except Exception: pass
+                try:
+                    kb = self.chroma_client.get_collection(name=self.KB_COLLECTION_NAME)
+                    kb.delete(where={"session_id": session_id})
+                except Exception:
+                    pass
+
+        return deleted_something
 
     def clear_all_history(self):
         history = self.get_history()
@@ -154,7 +255,7 @@ class HistoryManager:
         logging.info("All history cleared from SQLite.")
 
     def cleanup_old_sessions(self, retention_days=7):
-        cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat()
+        cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat()
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT id FROM sessions WHERE timestamp < ?", (cutoff,))

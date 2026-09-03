@@ -2,7 +2,42 @@ import configparser
 import os
 import json
 import logging
+import logging as _log_mod
 from src.utils.constants import CONFIG_DIR, MAIN_CONFIG_FILENAME, DEFAULT_THEME_NAME
+
+# 凭据安全存储：优先 OS 密钥环（Windows DPAPI / macOS Keychain / Linux SecretService）。
+# 不可用时降级到 ini 明文（旧行为），并在日志中明确警示。
+try:
+    import keyring
+    _KEYRING_AVAILABLE = True
+except Exception:
+    _KEYRING_AVAILABLE = False
+
+_KEYRING_SERVICE = "VideoAnalysisPro"
+
+
+def _secure_set(key: str, value: str):
+    """把 API Key 等敏感凭据存入 OS 密钥环；不可用时退回 ini。"""
+    if _KEYRING_AVAILABLE and value:
+        try:
+            keyring.set_password(_KEYRING_SERVICE, key, value)
+            return  # 成功 → 不落 ini
+        except Exception as e:
+            _log_mod.warning(f"keyring 不可用，凭据将明文存于 ini: {e}")
+    # 回退：仅存一个标记位（"__keyring__"）而非真实 Key
+    return None
+
+
+def _secure_get(key: str, fallback: str = "") -> str:
+    if _KEYRING_AVAILABLE:
+        try:
+            val = keyring.get_password(_KEYRING_SERVICE, key)
+            if val:
+                return val
+        except Exception:
+            pass
+    return fallback
+
 
 class ConfigurationManager:
     def __init__(self):

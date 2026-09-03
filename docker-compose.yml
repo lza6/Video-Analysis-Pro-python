@@ -1,0 +1,34 @@
+# Video Analysis Pro — Docker Compose
+# CPU:   docker compose up analy
+# GPU:   docker compose --profile gpu up analyzer
+services:
+  analyzer:
+    build: .
+    image: video-analysis-pro:latest
+    ports:
+      - "8000:8000"
+    environment:
+      - VAP_PORT=8000
+      - VAP_MAX_UPLOAD_MB=512
+    volumes:
+      - vap-data:/data
+    restart: unless-stopped
+
+  analyzer-gpu:
+    extends:
+      service: analyzer
+    image: video-analysis-pro:cuda
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda
+    profiles: ["gpu"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  vap-data:

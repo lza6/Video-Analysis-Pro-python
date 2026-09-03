@@ -4,13 +4,25 @@ import logging
 import json
 import requests
 import time
+import psutil
 
 from pathlib import Path
 
 # Fix module search path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QLabel, QTabWidget, QPushButton, QTextEdit, QFileDialog, 
+
+# CRITICAL: torch must be imported BEFORE PyQt6 on Windows.
+# PyQt6 registers its own vcruntime140/msvcp140 DLL directory first, and
+# torch's c10.dll then resolves against that older copy and fails to
+# initialize (WinError 1114). Importing torch first pins the correct
+# runtime DLLs into the process for both libraries.
+try:
+    import torch  # noqa: F401  (DLL load-order fix, see comment above)
+except OSError:
+    torch = None  # Headless/CPU-broken environments must still be able to show the UI
+
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                             QLabel, QTabWidget, QPushButton, QTextEdit, QFileDialog,
                              QProgressBar, QComboBox, QCheckBox, QSlider, QGroupBox, QSplitter,
                              QScrollArea, QToolBox, QSizePolicy, QFrame, QGridLayout)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize, QDateTime
@@ -90,11 +102,29 @@ class ExtractionWorker(QThread):
             # 1. Video Processing
             processor = VideoProcessor(self.video_path, output_dir)
             density = self.config.get("extraction_density", 0.2)
-            
-            # Note: extract_keyframes in logic.py handles sampling
-            frames = processor.extract_keyframes(density=density, max_frames=10000)
+
+            # Honor the "智能关键帧提取" checkbox: it feeds smart_extraction
+            # in the config dict, which was historically read nowhere, so the
+            # toggle silently did nothing. extract_smart_keyframes uses
+            # scene detection + blur retry; extract_keyframes samples evenly.
+            if self.config.get("smart_extraction"):
+                self.log.emit("使用智能场景切分提取关键帧...")
+                frames = processor.extract_smart_keyframes()
+            else:
+                frames = processor.extract_keyframes(density=density, max_frames=10000)
             self.log.emit(f"提取了 {len(frames)} 个关键帧")
-            
+
+            # Retrieve duration for the Agent tools / timeline
+            cap = cv2.VideoCapture(str(self.video_path))
+            video_duration = 0.0
+            try:
+                fps = cap.get(cv2.CAP_PROP_FPS) or 0
+                total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                if fps > 0 and total > 0:
+                    video_duration = total / fps
+            finally:
+                cap.release()
+
             # 2. Audio
             transcript = ""
             if self.config.get("enable_audio"):
@@ -102,15 +132,18 @@ class ExtractionWorker(QThread):
                 audio_proc = AudioProcessor()
                 audio_path = audio_proc.extract_audio(self.video_path, output_dir)
                 if audio_path:
-                    # Check if transcribe returns object or text. logic.py says AudioTranscript object
+                    # Keep the full AudioTranscript object: dropping down to
+                    # res.text discarded segments/waveform, which left the
+                    # timeline waveform permanently empty.
                     res = audio_proc.transcribe(audio_path)
-                    transcript = res.text if res else ""
+                    transcript = res if res else ""
                     self.log.emit("音频转录完成")
-            
+
             result = {
                 "frames": frames,
                 "transcript": transcript,
-                "output_dir": output_dir
+                "output_dir": output_dir,
+                "duration": video_duration
             }
             self.finished.emit(result)
             
@@ -262,15 +295,40 @@ class MediaWorker(QThread):
 class ModelDownloadWorker(QThread):
     progress = pyqtSignal(str, int) # model_id, percent
     finished = pyqtSignal(str, bool) # model_id, success
-    
+
     def __init__(self, manager, model_id):
         super().__init__()
         self.manager = manager
         self.model_id = model_id
-        
+
     def run(self):
         success = self.manager.download_model(self.model_id, lambda p: self.progress.emit(self.model_id, p))
         self.finished.emit(self.model_id, success)
+
+class KBIndexWorker(QThread):
+    """v4.5: 后台把关键帧写入跨视频知识库，避免阻塞 UI。"""
+    log = pyqtSignal(str)
+
+    def __init__(self, history_manager, session_id, video_name, video_path, frames):
+        super().__init__()
+        self.history_manager = history_manager
+        self.session_id = session_id
+        self.video_name = video_name
+        self.video_path = video_path
+        self.frames = frames
+
+    def run(self):
+        try:
+            from src.core.kb_indexer import index_frames
+            self.log.emit("🔎 正在索引关键帧到跨视频知识库...")
+            indexed = index_frames(self.history_manager, self.session_id,
+                                   self.video_name, self.video_path, self.frames)
+            if indexed:
+                self.log.emit(f"✅ 知识库索引完成: 本次新增 {indexed} 帧 (可跨视频搜索)。")
+            else:
+                self.log.emit("ℹ️ 知识库索引跳过 (CLIP 不可用或无帧)。")
+        except Exception as e:
+            self.log.emit(f"KB Index Error: {e}")
 
 class OllamaRefreshWorker(QThread):
     models_ready = pyqtSignal(list)
@@ -466,15 +524,31 @@ class DesktopApp(QMainWindow):
         logging.info("Shutting down... releasing VRAM and stopping workers.")
         if hasattr(self, 'timer_vram'):
             self.timer_vram.stop()
-            
+        if hasattr(self, 'timer_model_check'):
+            self.timer_model_check.stop()
+        if getattr(self, 'timer_monitor', None) is not None:
+            self.timer_monitor.stop()
+
+        # Stop potential background workers before the window dies, otherwise
+        # Qt aborts with "QThread: Destroyed while thread is still running".
+        for attr in ('worker', 'ai_worker', 'media_worker', 'chat_worker',
+                     'load_worker', 'api_check_worker', 'ollama_worker'):
+            worker = getattr(self, attr, None)
+            if worker is not None:
+                if hasattr(worker, 'stop'):
+                    worker.stop()
+                if worker.isRunning():
+                    worker.wait(3000)
+
+        for worker in getattr(self, '_download_workers', []):
+            if worker.isRunning():
+                worker.wait(3000)
+
         # Unload all models
-        if self.vram_manager:
+        if getattr(self, 'vram_manager', None):
             for m in list(self.vram_manager.active_models.keys()):
                 self.vram_manager.unload(m)
-                
-        # Stop potential background works
-        # ... logic for worker stops ...
-        
+
         logging.shutdown()
         event.accept()
 
@@ -483,7 +557,6 @@ class DesktopApp(QMainWindow):
         try:
             if NVIDIA_GPU_AVAILABLE:
                 import pynvml
-                pynvml.nvmlInit()
                 handle = pynvml.nvmlDeviceGetHandleByIndex(0)
                 mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
                 used_gb = mem.used / 1024**3
@@ -835,7 +908,7 @@ class DesktopApp(QMainWindow):
         self.tab_models.detect_requested.connect(self.on_detect_model_type)
         for mid, card in self.tab_models.cards.items():
             card.download_requested.connect(self.start_model_download)
-            card.btn_health.clicked.connect(lambda checked, m=mid: logging.info(f"正在校验 {m} 的完整性..."))
+            card.btn_health.clicked.connect(lambda checked, m=mid: self._verify_model_integrity(m))
         self.tabs.addTab(self.tab_models, "📦 模型管理")
         
         # Periodic check for local models
@@ -892,7 +965,13 @@ class DesktopApp(QMainWindow):
             cfg = self.app_config['LastUsed']
             self.combo_client.setCurrentIndex(int(cfg.get('client_type', 1)))
             self.txt_api_url.setPlainText(cfg.get('api_url', ""))
-            self.txt_api_key.setPlainText(cfg.get('api_key', ""))
+            # 优先从密钥环读取 API Key（旧版明文自动迁移后从 ini 清空）
+            try:
+                from src.utils.config_manager import _secure_get
+                api_key = _secure_get("api_key", cfg.get('api_key', ""))
+            except Exception:
+                api_key = cfg.get('api_key', "")
+            self.txt_api_key.setPlainText(api_key)
             self.combo_api_model.setEditText(cfg.get('model_name', ""))
             
             show_agent = self.app_config['Application'].getboolean('show_agent_panel', True)
@@ -903,7 +982,13 @@ class DesktopApp(QMainWindow):
     def save_current_settings(self):
         self.config_manager.update_config("LastUsed", "client_type", self.combo_client.currentIndex())
         self.config_manager.update_config("LastUsed", "api_url", self.txt_api_url.toPlainText())
-        self.config_manager.update_config("LastUsed", "api_key", self.txt_api_key.toPlainText())
+        # API Key 不再明文入 ini：优先 OS 密钥环 (DPAPI/Keychain)。
+        try:
+            from src.utils.config_manager import _secure_set
+            _secure_set("api_key", self.txt_api_key.toPlainText())
+        except Exception as e:
+            logging.warning(f"secure key storage fallback to ini: {e}")
+            self.config_manager.update_config("LastUsed", "api_key", self.txt_api_key.toPlainText())
         self.config_manager.update_config("LastUsed", "model_name", self.combo_api_model.currentText())
 
     def _refresh_preset_combo(self):
@@ -1051,12 +1136,7 @@ class DesktopApp(QMainWindow):
         
         # Create a new AI bubble for streaming
         self.agent_panel.append_message("Agent", "", model_name=model)
-        
-        # Determine prompt: include video context if available
-        context = ""
-        if hasattr(self, 'report_full_text') and self.report_full_text:
-            context = f"\n\nVideo Context:\n{self.report_full_text}"
-        
+
         full_prompt = f"User Question: {text}"
         if hasattr(self, 'agent_system_context') and self.agent_system_context:
             full_prompt = f"{self.agent_system_context}\n\nUser Question: {text}"
@@ -1169,11 +1249,29 @@ class DesktopApp(QMainWindow):
             else:
                 QMessageBox.warning(self, "组件更新", f"必要组件 {model_id} 下载失败，可能会影响分析。")
 
+    def _verify_model_integrity(self, model_id: str):
+        """模型文件 SHA256 完整性校验（供应链安全）。"""
+        logging.info(f"正在校验 {model_id} 的完整性...")
+        try:
+            ok = self.model_manager.verify_model_integrity(model_id)
+        except Exception as e:
+            logging.info(f"❌ 校验 {model_id} 出错: {e}")
+            return
+        if ok:
+            logging.info(f"✅ {model_id} 完整性校验通过")
+        else:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, "完整性校验失败",
+                f"模型 {model_id} 校验失败！\n文件可能被篡改或损坏。\n"
+                f"建议删除 models/ 下对应文件后重新下载。"
+            )
+
     def check_local_models(self):
         for mid, card in self.tab_models.cards.items():
             path = self.model_manager.get_model_path(mid)
             exists = path is not None and path.exists()
-            self.tab_models.update_model_status(mid, exists)
+            self.tab_models.update_model_status(mid, exists, actual_path=path)
         
         # Also refresh found files
         found_files = self.model_manager.list_local_models()
@@ -1198,10 +1296,12 @@ class DesktopApp(QMainWindow):
         if not missing_list:
             if self.loading_overlay.isVisible(): self.loading_overlay.hide()
             return
-        
+
         current = missing_list[0]
-        remaining = missing_list[1:]
-        
+        # Store remaining queue on the instance so on_download_finished can
+        # continue the sequence (a local variable would be lost here).
+        self._remaining_downloads = missing_list[1:]
+
         self.start_model_download(current)
 
     def on_detect_model_type(self, model_filename):
@@ -1212,8 +1312,6 @@ class DesktopApp(QMainWindow):
             logging.info(f"探测模型 {model_filename} 类型为: {m_type}")
         except Exception as e:
             logging.info(f"探测模型失败: {e}")
-        # Note: on_download_finished will need to be updated to trigger the next one if remaining
-        self._remaining_downloads = remaining
 
     def on_download_finished(self, model_id, success):
         self.check_local_models()
@@ -1565,11 +1663,11 @@ class DesktopApp(QMainWindow):
         self.video_path = None
         self.timer_monitor = None
         self.prompt_loader = PromptLoader()
-        
+
         from src.core.history_manager import HistoryManager
         from src.utils.constants import CONFIG_DIR
         self.history_manager = HistoryManager(CONFIG_DIR)
-        
+
         # Run auto-cleanup in background to avoid startup delay
         QTimer.singleShot(5000, lambda: self.history_manager.cleanup_old_sessions(7))
 
@@ -1578,23 +1676,80 @@ class DesktopApp(QMainWindow):
         # Context provider returns self (DesktopApp instance)
         context_provider = lambda: self
         self.tool_registry.set_context_provider(context_provider)
-        
+
         self.tool_registry.register_tool(
-            "get_video_meta", 
-            "Get metadata about the current video (path, duration, etc.)", 
+            "get_video_meta",
+            "Get metadata about the current video (path, duration, etc.)",
             create_get_video_meta_tool(context_provider)
         )
         self.tool_registry.register_tool(
-            "get_frame_details", 
-            "Get details (caption, OCR) for a specific second in the video. Args: {'seconds': 10.5}", 
+            "get_frame_details",
+            "Get details (caption, OCR) for a specific second in the video. Args: {'seconds': 10.5}",
             create_get_frame_details_tool(context_provider),
             {"seconds": "float"}
         )
         self.tool_registry.register_tool(
-            "delete_this_history", 
-            "Delete the current analysis session/history. Use with caution.", 
+            "delete_this_history",
+            "Delete the current analysis session/history. Use with caution.",
             create_delete_history_tool(context_provider)
         )
+        # Phase 2 tools: previously only registered inside dead code after
+        # `if __name__ == "__main__"` and therefore never available.
+        from src.core.agent_tools import (create_highlight_cut_tool,
+                                          create_visual_grounding_tool)
+        self.tool_registry.register_tool(
+            "search_web",
+            "Search the internet for information. Args: {'query': 'search term'}",
+            create_search_web_tool(),
+            {"query": "搜索词"}
+        )
+        self.tool_registry.register_tool(
+            "search_visual",
+            "Semantically search video frames by description. Args: {'query': 'scene description'}",
+            create_visual_search_tool(context_provider),
+            {"query": "画面描述"}
+        )
+        self.tool_registry.register_tool(
+            "run_ocr",
+            "Run OCR on the frame at a specific second. Args: {'seconds': 10.5}",
+            create_ocr_tool(context_provider),
+            {"seconds": "时间(秒)"}
+        )
+        self.tool_registry.register_tool(
+            "create_highlights",
+            "Automatically cut highlight clips from the video. Args: {'description': 'what to highlight'}",
+            create_highlight_cut_tool(context_provider),
+            {"description": "集锦描述"}
+        )
+        self.tool_registry.register_tool(
+            "point_and_jump",
+            "Locate an object in the video and jump to it. Args: {'query': 'target description'}",
+            create_visual_grounding_tool(context_provider),
+            {"query": "目标描述"}
+        )
+        # v4.5 跨视频知识库搜索
+        from src.core.agent_tools import create_kb_search_tool
+        self.tool_registry.register_tool(
+            "search_kb",
+            "Search ALL previously analyzed videos for a scene by description "
+            "(cross-video knowledge base). Args: {'query': 'scene description'}",
+            create_kb_search_tool(context_provider),
+            {"query": "画面描述"}
+        )
+
+    def seek_video(self, ts):
+        """Unified jump method for Agent tools (used by point_and_jump)."""
+        logging.info(f"Agent requested jump to {ts}s")
+        # If the video player dialog is open, seek it
+        from src.ui.video_player_dialog import VideoPlayerDialog
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, VideoPlayerDialog):
+                if hasattr(widget, 'media_player'):
+                    widget.media_player.setPosition(int(ts * 1000))
+                    return
+
+        # Otherwise log it (main window has no persistent preview to seek)
+        self.append_log(f"Agent 已定位到关键时刻: {ts:.1f}s")
 
     def append_log(self, msg):
         # Safeguard: prevent crash if logging happens before UI is ready
@@ -1777,16 +1932,25 @@ class DesktopApp(QMainWindow):
         self.transcript = result['transcript']
         self.output_dir = result['output_dir']
         self.video_duration = result.get('duration', 0.0)
-        
-        # Save to History
-        self.history_manager.add_session(self.video_path, self.output_dir)
-        
+
+        # Save to History (session_id drives KB entry ownership)
+        self.current_session_id = self.history_manager.add_session(self.video_path, self.output_dir)
+
         # Populate Gallery
         self.populate_gallery(self.frames)
-        
+
         # Generate Metrics Plot
         self.plot_metrics(self.frames)
-        
+
+        # v4.5: index frames into the cross-video knowledge base (background)
+        if self.frames:
+            self.kb_worker = KBIndexWorker(
+                self.history_manager, self.current_session_id,
+                self.video_path.name, str(self.video_path), self.frames
+            )
+            self.kb_worker.log.connect(self.on_worker_log)
+            self.kb_worker.start()
+
         # Update UI state
         self.btn_start.setText("🔄 重新提取 (Phase 1)")
         self.btn_start.setEnabled(True)
@@ -1895,7 +2059,14 @@ class DesktopApp(QMainWindow):
         if path.suffix.lower() in ['.mp4', '.avi', '.mov', '.mkv']:
             try:
                 from src.ui.video_player_dialog import VideoPlayerDialog
-                dlg = VideoPlayerDialog(path, self)
+                # Pass the extracted keyframes so the timeline shows markers,
+                # and the transcript waveform so the audio track renders.
+                frames = getattr(self, 'frames', []) or []
+                transcript = getattr(self, 'transcript', None)
+                waveform = getattr(transcript, 'waveform', None)
+                dlg = VideoPlayerDialog(path, self, frames=frames)
+                if waveform is not None:
+                    dlg.timeline.set_waveform(waveform)
                 dlg.exec()
             except ImportError:
                 # Fallback if dialog issue
@@ -2063,8 +2234,19 @@ class DesktopApp(QMainWindow):
         # Reset report text
         self.txt_report.clear()
         self.report_full_text = ""
-        
-        custom_p = self.txt_custom_prompt.toPlainText() if self.txt_custom_prompt.isVisible() else None
+
+        # Historical bug: the template body was only forwarded when the
+        # "自定义" entry was selected (txt_custom_prompt visible). Selecting a
+        # built-in template sent custom_p=None, so analyze_video fell back to
+        # its one-line English default and the chosen template did nothing.
+        if self.combo_prompt.currentText() == "自定义":
+            custom_p = self.txt_custom_prompt.toPlainText().strip() or None
+        else:
+            idx = self.combo_prompt.currentIndex()
+            if 0 <= idx < len(self.prompt_templates):
+                custom_p = self.prompt_templates[idx].get('content', '').strip() or None
+            else:
+                custom_p = None
         self.ai_worker = AnalysisWorker(self.analyzer, self.frames, self.transcript, custom_p)
         self.ai_worker.chunk_received.connect(self.update_report)
         self.ai_worker.finished.connect(self.on_ai_finished)
@@ -2084,15 +2266,27 @@ class DesktopApp(QMainWindow):
     def inject_agent_system_context(self):
         """Builds a context prompt from Phase 1 & 2 results and injects it into the Agent."""
         if not self.frames: return
-        
+
         # Build Context String
         duration = getattr(self, 'video_duration', 0)
         video_name = self.video_path.name if self.video_path else "Unknown Video"
-        
+
+        # Transcript may be an AudioTranscript object (current) or a plain
+        # string (legacy callers); normalise to text for the prompt.
+        transcript_obj = getattr(self, 'transcript', None)
+        if transcript_obj and hasattr(transcript_obj, 'text'):
+            transcript_text = transcript_obj.text
+        elif transcript_obj:
+            transcript_text = str(transcript_obj)
+        else:
+            transcript_text = ""
+        if transcript_text:
+            transcript_text = transcript_text[:2000] + "..."
+
         context_str = f"--- System Context ---\n"
         context_str += f"Current Video: {video_name}\n"
         context_str += f"Duration: {duration:.2f} seconds\n"
-        context_str += f"Recognized Transcript:\n{self.transcript[:2000]}...\n" if hasattr(self, 'transcript') and self.transcript else "No transcript available.\n"
+        context_str += f"Recognized Transcript:\n{transcript_text}\n" if transcript_text else "No transcript available.\n"
         context_str += f"\nAI Analysis Report:\n{getattr(self, 'report_full_text', '')}\n"
         context_str += "--------------------\n"
         
@@ -2101,12 +2295,6 @@ class DesktopApp(QMainWindow):
         self.agent_panel.inject_context(context_str)
 
     def export_pdf(self):
-        report_md = self.txt_report.toMarkdown() # or toPlainText since we display MD? 
-        # Actually txt_report contains rendered HTML if we used setHtml? No, we used setMarkdown?
-        # Let's check update_report (not visible here, but assuming it sets text).
-        # We need the raw markdown for export function.
-        # self.txt_report.toPlainText() is safest if we set raw text.
-        
         if not self.output_dir:
             logging.info("无法导出: 无输出目录")
             return
@@ -2168,32 +2356,3 @@ def run_main():
 
 if __name__ == "__main__":
     sys.exit(run_main())
-    def init_backend(self):
-        """Register all tools including search and OCR."""
-        from src.core.agent_tools import (create_highlight_cut_tool, create_visual_grounding_tool)
-        
-        self.tool_registry = ToolRegistry()
-        self.tool_registry.set_context_provider(lambda: self)
-        
-        self.tool_registry.register_tool("get_video_meta", "获取视频基本信息", create_get_video_meta_tool(lambda: self))
-        self.tool_registry.register_tool("get_frame_details", "获取特定时间的画面细节", create_get_frame_details_tool(lambda: self), {"seconds": "时间(秒)"})
-        self.tool_registry.register_tool("search_web", "搜索互联网内容", create_search_web_tool(), {"query": "搜索词"})
-        self.tool_registry.register_tool("search_visual", "按语义搜索视频画面", create_visual_search_tool(lambda: self), {"query": "画面描述"})
-        self.tool_registry.register_tool("run_ocr", "对特定画面执行文字识别", create_ocr_tool(lambda: self), {"seconds": "时间(秒)"})
-        
-        # Phase 2 Tools
-        self.tool_registry.register_tool("create_highlights", "自动剪辑生成精彩集锦", create_highlight_cut_tool(lambda: self), {"description": "集锦描述"})
-        self.tool_registry.register_tool("point_and_jump", "在画面中定位物体并跳转", create_visual_grounding_tool(lambda: self), {"query": "目标描述"})
-
-    def seek_video(self, ts):
-        """Unified jump method for Agent tools."""
-        logging.info(f"Agent requested jump to {ts}s")
-        # 1. If video player dialog is open, seek it
-        for widget in QApplication.topLevelWidgets():
-            if isinstance(widget, QDialog) and "播放器" in widget.windowTitle():
-                 if hasattr(widget, 'media_player'):
-                     widget.media_player.setPosition(int(ts * 1000))
-                     return
-        
-        # 2. Otherwise log it (could expand to seek main preview if exists)
-        self.append_log(f"Agent 已定位到关键时刻: {ts:.1f}s")

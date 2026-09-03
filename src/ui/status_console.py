@@ -57,14 +57,17 @@ class ResourceMonitor(QFrame):
         self.cpu_bar.setRange(0, 100)
         self.cpu_bar.setFixedHeight(10)
         self.cpu_bar.setTextVisible(False)
-        
-        # RAM
+
+        # RAM (system) + process memory (this app's own footprint)
         self.ram_lbl = QLabel("RAM: 0%")
         self.ram_bar = QProgressBar()
         self.ram_bar.setRange(0, 100)
         self.ram_bar.setFixedHeight(10)
         self.ram_bar.setTextVisible(False)
-        
+
+        self.proc_lbl = QLabel("本程序: 0 MB")
+        self.proc_lbl.setToolTip("本应用进程占用的物理内存 (RSS)")
+
         # VRAM (Mock/Place-holder for now, will be updated by main window via Ollama)
         self.vram_lbl = QLabel("VRAM: N/A")
         self.vram_bar = QProgressBar()
@@ -77,10 +80,12 @@ class ResourceMonitor(QFrame):
         self.layout.addSpacing(10)
         self.layout.addWidget(self.ram_lbl)
         self.layout.addWidget(self.ram_bar)
+        self.layout.addSpacing(6)
+        self.layout.addWidget(self.proc_lbl)
         self.layout.addSpacing(10)
         self.layout.addWidget(self.vram_lbl)
         self.layout.addWidget(self.vram_bar)
-        
+
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_stats)
         self.timer.start(2000)
@@ -92,6 +97,12 @@ class ResourceMonitor(QFrame):
         self.cpu_bar.setValue(int(cpu))
         self.ram_lbl.setText(f"RAM: {ram}%")
         self.ram_bar.setValue(int(ram))
+        # 本进程 RSS（区分于系统整体 RAM）
+        try:
+            rss_mb = psutil.Process().memory_info().rss / 1024 / 1024
+            self.proc_lbl.setText(f"本程序: {rss_mb:.0f} MB")
+        except Exception:
+            pass
 
     def update_vram(self, used, total):
         percent = int(used / total * 100) if total > 0 else 0

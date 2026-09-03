@@ -59,7 +59,6 @@ class TimelineWidget(QWidget):
             path = QPainterPath()
             path.moveTo(0, track_y + wave_h / 2)
             
-            step = len(self.waveform_data) // w if len(self.waveform_data) > w else 1
             for x in range(0, w):
                 idx = int((x / w) * len(self.waveform_data))
                 val = self.waveform_data[idx] * (wave_h / 2)

@@ -64,16 +64,22 @@ def check_cuda_health() -> bool:
     except Exception as e:
         logger.warning(f"CUDA/cuDNN initialization health check failed: {e}")
         return False
-try:
-    # MoviePy, Matplotlib, Seaborn are now lazy loaded
-    pass
-    ADVANCED_FEATURES_AVAILABLE = True
-except ImportError as e:
-    logging.warning(f"高级功能依赖加载失败: {e}")
-    ADVANCED_FEATURES_AVAILABLE = False
-except Exception as e:
-    logging.warning(f"高级功能依赖初始化错误: {e}")
-    ADVANCED_FEATURES_AVAILABLE = False
+def _detect_advanced_features() -> bool:
+    """Probe the lazy-loaded Phase-3 dependencies for real availability.
+
+    Historical bug: this used to be `try: pass; FLAG=True except ...`, so the
+    flag was always True and Phase 3 crashed at runtime instead of being
+    disabled up front.
+    """
+    import importlib
+    for module in ("moviepy", "matplotlib.pyplot", "seaborn"):
+        try:
+            importlib.import_module(module)
+        except Exception:
+            return False
+    return True
+
+ADVANCED_FEATURES_AVAILABLE = _detect_advanced_features()
 
 try:
     from pymediainfo import MediaInfo
@@ -134,8 +140,7 @@ class ModelContextManager:
     def unload(self, name: str):
         if name in self.active_models:
             logger.info(f"显存管理：正在卸载模型 {name}")
-            instance = self.active_models.pop(name)
-            del instance
+            del self.active_models[name]
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             gc.collect()
@@ -393,8 +398,36 @@ class ModelManager:
             
         return "Text-only LLM"
 
+    # 供应链安全：已知的预期 SHA256（下载完成后校验，防止 MITM 投毒）。
+    # None 表示该来源未提供稳定 hash，跳过校验（仅体积/可用性检查）。
+    EXPECTED_SHA256 = {
+        "yolo_v11n": None,  # ultralytics 偶尔变更 release 资产 hash
+        "whisper_base": "ed3a0b6b1c0fd3c4b11f62cee8e285d8d052d0fa55b850d5337f71b16e864ee0",
+    }
+
+    def verify_model_integrity(self, model_id: str) -> bool:
+        """下载后/启动时校验模型文件 SHA256，防篡改。"""
+        expected = self.EXPECTED_SHA256.get(model_id)
+        path = self.get_model_path(model_id)
+        if not path or not path.exists():
+            return False
+        if expected is None:
+            return True  # 未约束 hash → 仅存在性校验
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        actual = h.hexdigest()
+        ok = actual == expected
+        if not ok:
+            logger.error(
+                f"模型 {model_id} 完整性校验失败！预期 {expected[:16]}… 实际 {actual[:16]}… "
+                f"文件可能被篡改/损坏，建议删除后重新下载。"
+            )
+        return ok
+
     def download_model(self, model_id: str, progress_callback=None):
-        """Downloads model with resume support."""
+        """Downloads model with resume support + SHA256 verification."""
         urls = {
             "yolo_v11n": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt",
             "whisper_base": "https://openaipublic.azureedge.net/main/whisper/models/ed3a0b6b1c0fd3c4b11f62cee8e285d8d052d0fa55b850d5337f71b16e864ee0/base.pt",
@@ -402,50 +435,54 @@ class ModelManager:
             "ffmpeg": "https://github.com/imageio/imageio-binaries/raw/master/ffmpeg/ffmpeg-win64-v4.2.2.exe"
         }
         url = urls.get(model_id)
-        if not url: 
+        if not url:
             logger.error(f"Unknown model_id for download: {model_id}")
             return False
-        
+
         filename = url.split('/')[-1]
         # logic.py mapping fix
         if model_id == "whisper_base": filename = "whisper_base.pt"
         if model_id == "st_minilm": filename = "st_minilm_model.bin" # simplified
         if model_id == "ffmpeg": filename = "ffmpeg.exe"
-        
+
         dest_path = self.models_dir / filename
-        
+
         try:
             logger.info(f"Downloading {model_id} from {url} to {dest_path}")
             headers = {}
             mode = 'wb'
             current_size = 0
-            
+
             if dest_path.exists():
                 current_size = dest_path.stat().st_size
                 headers['Range'] = f'bytes={current_size}-'
                 mode = 'ab'
-            
+
             response = requests.get(url, headers=headers, stream=True, timeout=30)
-            
-            if response.status_code == 416: 
+
+            if response.status_code == 416:
                 logger.info(f"Model {model_id} already fully downloaded.")
-                return True
-            
-            # Case where server doesn't support range
-            if response.status_code == 200 and 'Range' in headers:
-                logger.warning("Server does not support Range requests. Restarting download.")
-                current_size = 0
-                mode = 'wb'
-            
-            total_size = int(response.headers.get('content-length', 0)) + current_size
-            
-            with open(dest_path, mode) as f:
-                for chunk in response.iter_content(chunk_size=65536):
-                    if chunk:
-                        f.write(chunk)
-                        current_size += len(chunk)
-                        if progress_callback and total_size > 0:
-                            progress_callback(int(current_size / total_size * 100))
+            else:
+                # Case where server doesn't support range
+                if response.status_code == 200 and 'Range' in headers:
+                    logger.warning("Server does not support Range requests. Restarting download.")
+                    current_size = 0
+                    mode = 'wb'
+
+                total_size = int(response.headers.get('content-length', 0)) + current_size
+
+                with open(dest_path, mode) as f:
+                    for chunk in response.iter_content(chunk_size=65536):
+                        if chunk:
+                            f.write(chunk)
+                            current_size += len(chunk)
+                            if progress_callback and total_size > 0:
+                                progress_callback(int(current_size / total_size * 100))
+
+            # 下载完成后校验完整性（供应链安全）
+            if not self.verify_model_integrity(model_id):
+                logger.error(f"模型 {model_id} 校验失败，请删除 models/{filename} 后重试。")
+                return False
             return True
         except Exception as e:
             logger.error(f"Download {model_id} failed with exception: {e}")
@@ -458,13 +495,15 @@ class AudioProcessor:
 
     def extract_audio(self, video_path: Path, output_dir: Path) -> Optional[Path]:
         try:
-            from moviepy.editor import VideoFileClip
+            # moviepy 2.x removed the moviepy.editor shim; the top-level
+            # import works on both 1.x and 2.x.
+            from moviepy import VideoFileClip
             audio_path = output_dir / "audio.mp3"
             if audio_path.exists(): return audio_path
             
             with VideoFileClip(str(video_path)) as video:
                 if video.audio:
-                    video.audio.write_audiofile(str(audio_path), verbose=False, logger=None)
+                    video.audio.write_audiofile(str(audio_path), logger=None)
                     return audio_path
             return None
         except Exception as e:
@@ -579,10 +618,14 @@ class AudioProcessor:
 class PromptLoader:
     def __init__(self, prompt_dir: Optional[str] = None):
         self.prompts = {}
-        self.prompt_dir = Path(prompt_dir) if prompt_dir else Path("config") / "prompts"
+        # The rich, curated prompt templates live under
+        # config/prompts/frame_analysis/ (video_summary.txt etc). The old
+        # default pointed at config/prompts/, where no files exist, so the
+        # fallback one-liner in code was always used.
+        self.prompt_dir = Path(prompt_dir) if prompt_dir else Path("config") / "prompts" / "frame_analysis"
         # Define defaults in code for robustness
         self.defaults = {
-            "Video Summary": "Analyze this video based on the frames.",
+            "Video Summary": "Analyze this video based on these keyframes: {frame_info}. Audio: {audio_transcript}. User Request: {user_prompt}",
         }
 
     def get_prompt(self, name: str) -> Optional[str]:
@@ -606,6 +649,9 @@ class OllamaClient(BaseAPIClient):
         self.base_url = base_url.rstrip('/')
         self.api_generate = f"{self.base_url}/api/generate"
         self.api_chat = f"{self.base_url}/api/chat"
+        # 本机 Ollama 永远不应走外部系统代理：默认 localhost 会被代理拦截挂起。
+        self._session = requests.Session()
+        self._session.trust_env = False
 
     def chat_stream(self, model: str, prompt: str, image_paths: Optional[List[str]] = None, temperature: float = 0.2, timeout: int = 600) -> Iterator[str]:
         # Logic to support images in Ollama
@@ -613,7 +659,7 @@ class OllamaClient(BaseAPIClient):
         if image_paths:
             for p in image_paths:
                 images_base64.append(self._encode_image_to_base64(p))
-        
+
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt, "images": images_base64}],
@@ -621,21 +667,48 @@ class OllamaClient(BaseAPIClient):
             "temperature": temperature,
             "options": {"num_ctx": 4096}
         }
-        
+
+        # Historical bug: this method yielded raw SSE JSON lines, which the
+        # ChatWorker forwarded verbatim to the chat UI (users saw
+        # '{"message":{"content":...' fragments). Parse the protocol here so
+        # every consumer receives plain-text deltas, matching the
+        # APIGatewayClient contract. Reasoning content is wrapped in <think>
+        # tags that AgentPanel already knows how to render/collapse.
         try:
-            with requests.post(self.api_chat, json=payload, stream=True, timeout=timeout) as response:
+            with self._session.post(self.api_chat, json=payload, stream=True, timeout=timeout) as response:
                 response.raise_for_status()
                 for line in response.iter_lines():
-                    if line: yield line.decode('utf-8')
+                    if not line:
+                        continue
+                    line_str = line.decode('utf-8')
+                    if line_str.startswith('data: '):
+                        line_str = line_str[6:]
+                    if line_str.strip() == '[DONE]':
+                        continue
+                    try:
+                        chunk = json.loads(line_str)
+                    except json.JSONDecodeError:
+                        # Not JSON — surface as-is rather than swallowing it.
+                        yield line_str
+                        continue
+                    message = chunk.get('message') or {}
+                    reasoning = message.get('thinking') or chunk.get('thinking') or ""
+                    if reasoning:
+                        yield f"<think>{reasoning}</think>"
+                    content = message.get('content') or chunk.get('response') or ""
+                    if content:
+                        yield content
+                    if chunk.get('error'):
+                        yield f"Ollama Error: {chunk['error']}"
         except Exception as e:
-            yield json.dumps({"message": {"content": f"Ollama Error: {str(e)}"}})
+            yield f"Ollama Error: {str(e)}"
 
     def get_status(self) -> Dict[str, Any]:
         """Returns status including running models and VRAM usage."""
         status = {"models": [], "vram_used": 0, "vram_total": 0, "gpu_util": 0}
         try:
             # Get running models (ps)
-            resp = requests.get(f"{self.base_url}/api/ps", timeout=3)
+            resp = self._session.get(f"{self.base_url}/api/ps", timeout=3)
             if resp.status_code == 200:
                 models = resp.json().get('models', [])
                 status['models'] = models
@@ -662,7 +735,7 @@ class OllamaClient(BaseAPIClient):
         try:
             # Sending specific request to unload (keep_alive=0)
             payload = {"model": model_name, "keep_alive": 0}
-            resp = requests.post(f"{self.api_chat}", json=payload, timeout=5)
+            resp = self._session.post(f"{self.api_chat}", json=payload, timeout=5)
             # Note: Ollama API might return 200 even if model wasn't loaded, which is fine.
             # Using /api/chat or /api/generate with keep_alive=0 works for unloading.
             return resp.status_code == 200
@@ -974,22 +1047,26 @@ class VideoAnalyzer:
                     chunk_str = chunk_data
                     if isinstance(chunk_str, bytes):
                         chunk_str = chunk_str.decode('utf-8')
-                        
+
                     if chunk_str.startswith('data: '): chunk_str = chunk_str[6:]
                     if chunk_str.strip() == '[DONE]': break
-                    
+
                     try:
                         chunk = json.loads(chunk_str)
                         delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "") or chunk.get("message", {}).get("content", "")
                     except:
                         # Fallback for non-JSON strings
                         delta = chunk_str
-                
+
                 if delta:
                     full_response_text += delta
                     yield delta
             except: continue
-        yield f"__FULL_RESPONSE_END__{full_response_text}"
+        # Historical bug: an internal sentinel "__FULL_RESPONSE_END__<text>"
+        # was appended to the stream and leaked verbatim into the rendered
+        # report and Agent transcript. The UI layer now accumulates the
+        # chunks itself, so the stream ends silently instead.
+        return
 
     def analyze_video(self, frames: List[Frame], transcript: Any, custom_template: Optional[str] = None) -> Iterator[str]:
         if custom_template:
@@ -1174,7 +1251,7 @@ def create_summary_media_artifacts(
     individual_clip_paths = []
     
     try:
-        from moviepy.editor import VideoFileClip, concatenate_videoclips
+        from moviepy import VideoFileClip, concatenate_videoclips
         
         with VideoFileClip(original_video_path) as video:
             for i, frame_obj in enumerate(selected_frames):
@@ -1183,9 +1260,9 @@ def create_summary_media_artifacts(
                     end_time = min(video.duration, frame_obj.timestamp + clip_duration_around_keyframe / 2)
                     if end_time <= start_time: continue
                     
-                    sub_clip = video.subclip(start_time, end_time)
+                    sub_clip = video.subclipped(start_time, end_time)
                     clip_path = get_unique_filepath(output_dir, f"{video_stem}_clip_{i:02d}.mp4")
-                    sub_clip.write_videofile(str(clip_path), codec='libx264', audio_codec='aac', verbose=False, threads=4) 
+                    sub_clip.write_videofile(str(clip_path), codec='libx264', audio_codec='aac', logger=None, threads=4) 
                     individual_clip_paths.append(str(clip_path))
                     sub_clip.close()
                 except Exception as e:
@@ -1203,14 +1280,14 @@ def create_summary_media_artifacts(
             
             if make_video:
                 concatenated_video_path = get_unique_filepath(output_dir, f"{video_stem}_summary.mp4")
-                final_clip.write_videofile(str(concatenated_video_path), fps=24, codec='libx264', audio_codec='aac', verbose=False, threads=4)
+                final_clip.write_videofile(str(concatenated_video_path), fps=24, codec='libx264', audio_codec='aac', logger=None, threads=4)
             
             if make_gif:
                 gif_path = get_unique_filepath(output_dir, f"{video_stem}_summary.gif")
                 res_map = {"低": 0.3, "中": 0.5, "高": 0.8}
                 resize_factor = res_map.get(gif_resolution, 0.5)
-                resized = final_clip.resize(resize_factor)
-                resized.write_gif(str(gif_path), fps=10, verbose=False)
+                resized = final_clip.resized(resize_factor)
+                resized.write_gif(str(gif_path), fps=10)
                 resized.close()
                 
             final_clip.close()

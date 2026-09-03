@@ -1,23 +1,40 @@
-requests
-numpy
-opencv-python-headless
-moviepy
-scenedetect
-ultralytics
-sentence-transformers
+# ============================================================================
+# Video Analysis Pro - Core Dependencies (Python 3.10 - 3.12)
+# 分层说明:
+#   core  = 本文件（应用启动与主功能的最小依赖集）
+#   ocr   = pip install -r requirements-ocr.txt   (PaddleOCR 文字识别，体积大)
+#   全量  = ocr 已含其余可选依赖
+# ============================================================================
+
+# --- GUI ---
+PyQt6>=6.6.0
+pyqtdarktheme>=2.1.0
+
+# --- Video / CV core ---
+opencv-python-headless>=4.8.0
+numpy>=1.24,<2.3
+scenedetect>=0.6.2
+ultralytics>=8.0.0
+moviepy>=2.0          # 代码已迁移到 moviepy 2.x API (subclipped/resized)
+imageio-ffmpeg        # 自带 FFmpeg 二进制，实现 FFmpeg 自给自足
+
+# --- AI core ---
+torch>=2.2
+faster-whisper>=1.0.0
+sentence-transformers>=2.3.0   # 2.2.2 与新版 huggingface_hub 不兼容
+
+# --- Persistence / utils ---
+chromadb
 markdown2
-PyQt6
-pyqtdarktheme
-gradio
+requests
 psutil
 pymediainfo
-faster-whisper
-paddleocr
-paddlepaddle-gpu
+pydub                  # 静音检测 + 波形提取（缺失时会静默降级）
+pillow
+nvidia-ml-py           # NVIDIA GPU 监控；无 GPU 时自动跳过
+
+# --- Agent tools (web search) ---
 duckduckgo-search
-open-clip-torch
-chromadb
-nvidia-ml-py
-decord
-imageio-ffmpeg
-pyannote.audio
+
+# --- PDF export ---
+weasyprint

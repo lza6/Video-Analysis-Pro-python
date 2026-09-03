@@ -1,0 +1,35 @@
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+graft/
+graft/.cache/
+graft/.graph/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual env
+venv/
+.venv/
+
+# Runtime artifacts
+logs/
+cache/
+软产生的缓存/
+crash_log.txt
+crash_debug.txt
+
+# Agent tools
+.agents/
+.claude/
+.cline/
+.codebuddy/
+.codegraph/
+.code-review-graph/
+.continue/
+.junie/
+.kiro/
+node_modules/

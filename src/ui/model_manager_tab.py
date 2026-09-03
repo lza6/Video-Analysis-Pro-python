@@ -41,10 +41,20 @@ class ModelCard(QFrame):
         
         self.layout.addWidget(self.lbl_name)
         self.layout.addWidget(self.lbl_desc)
-        self.layout.addWidget(QLabel(f"预计大小: {size}"))
+        self.lbl_size = QLabel(f"大小: {size}")
+        self.lbl_size.setToolTip("实际磁盘占用 (models/ 目录下的真实文件大小)")
+        self.layout.addWidget(self.lbl_size)
         self.layout.addWidget(self.lbl_status)
         self.layout.addWidget(self.progress)
         self.layout.addLayout(btn_layout)
+
+    def set_actual_size(self, file_path):
+        """用模型文件的真实磁盘大小替换'预计大小'。"""
+        from pathlib import Path
+        p = Path(file_path)
+        if p.exists():
+            size_mb = p.stat().st_size / 1024 / 1024
+            self.lbl_size.setText(f"实际占用: {size_mb:.1f} MB")
 
     def set_downloading(self):
         self.progress.setVisible(True)
@@ -139,10 +149,12 @@ class ModelManagerTab(QWidget):
                 col = 0
                 row += 1
 
-    def update_model_status(self, model_id, exists):
+    def update_model_status(self, model_id, exists, actual_path=None):
         if model_id in self.cards:
             if exists:
                 self.cards[model_id].set_ready()
             else:
                 # Reset if deleted
                 pass
+        if actual_path is not None:
+            self.cards[model_id].set_actual_size(actual_path)

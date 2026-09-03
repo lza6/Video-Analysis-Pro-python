@@ -1,5 +1,6 @@
 import json
 import logging
+from pathlib import Path
 from typing import Callable, Any, Dict, List
 
 class Tool:
@@ -52,8 +53,10 @@ def create_get_video_meta_tool(app_context_getter):
         app = app_context_getter()
         if not app or not app.video_path:
             return "No video loaded."
+        # video_path may be a Path (main window) or a plain str; normalise.
+        video_path = Path(app.video_path)
         return json.dumps({
-            "filename": app.video_path.name,
+            "filename": video_path.name,
             "duration": getattr(app, 'video_duration', 0),
             "output_dir": str(app.output_dir),
             "frame_count": len(app.frames) if hasattr(app, 'frames') else 0
@@ -215,12 +218,9 @@ def create_highlight_cut_tool(app_context_getter):
         if not app: return "App context missing."
         
         try:
-            from moviepy.editor import VideoFileClip, concatenate_videoclips
+            from moviepy import VideoFileClip, concatenate_videoclips
             output_path = app.output_dir / "highlights.mp4"
-            
-            # Logic: Identify ranges from memory or metadata
-            # For demo, we take first 10 seconds of detected keyframes
-            clips = []
+
             video = VideoFileClip(str(app.video_path))
             
             # Simplified: Use first 3 keyframes with content
@@ -230,7 +230,7 @@ def create_highlight_cut_tool(app_context_getter):
                  for f in valid_frames:
                      start = max(0, f.timestamp - 2)
                      end = min(video.duration, f.timestamp + 2)
-                     segments.append(video.subclip(start, end))
+                     segments.append(video.subclipped(start, end))
             
             if not segments:
                 video.close()
@@ -270,3 +270,42 @@ def create_visual_grounding_tool(app_context_getter):
         except Exception as e:
             return f"定位出错: {e}"
     return point_at_object
+
+def create_kb_search_tool(app_context_getter):
+    """v4.5: 跨视频语义搜索工具。
+
+    在所有已索引的分析会话中按描述搜索画面，返回带时间戳的结果，
+    可直接跳转到对应视频的对应时刻。
+    """
+    def search_kb(query: str):
+        app = app_context_getter()
+        if not app:
+            return "App context missing."
+        history_manager = getattr(app, 'history_manager', None)
+        if not history_manager:
+            return "Knowledge base unavailable."
+
+        try:
+            from src.core.kb_indexer import get_embedder
+            embedder = get_embedder()
+            if embedder is None:
+                return "Knowledge base unavailable: CLIP embedder could not be loaded."
+
+            query_emb = embedder.encode(query, convert_to_tensor=False)
+            hits = history_manager.search_kb(query_emb, top_k=8)
+            if not hits:
+                return "知识库中没有匹配结果。可能尚未索引任何视频，或描述差异过大。"
+
+            lines = []
+            for i, hit in enumerate(hits, 1):
+                jumpable = " (可跳转)" if hit["video_path"] else ""
+                lines.append(
+                    f"{i}. {hit['video_name']} @ {hit['timestamp']:.2f}s "
+                    f"(匹配度 {hit['score']:.2f}){jumpable}\n"
+                    f"   内容: {hit['content'][:120] or '(无描述)'}\n"
+                    f"   路径: {hit['video_path']}"
+                )
+            return "\n".join(lines)
+        except Exception as e:
+            return f"KB search error: {e}"
+    return search_kb

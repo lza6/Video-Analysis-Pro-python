@@ -14,7 +14,7 @@ call :main
 
 if %errorlevel% neq 0 (
     echo.
-    echo [ERROR] 启动脚本执行出错! 
+    echo [ERROR] 启动脚本执行出错!
     echo 请查看 logs/startup_bat.log 获取详情。
     echo.
     echo === 错误日志预览 (最后 20 行) ===
@@ -36,23 +36,52 @@ set PYTHONIOENCODING=utf-8
 echo [INFO] Batch script started at %date% %time%
 echo [INFO] Working Directory: %cd%
 
-if exist "venv\Scripts\python.exe" goto :found_venv
+rem --- 1. Prefer existing venv ---
+if exist "venv\Scripts\python.exe" (
+    echo [INFO] Detected Virtual Environment. Using venv python.
+    powershell -Command "& 'venv\Scripts\python.exe' launcher.py 2>&1 | Tee-Object -FilePath logs\startup_bat.log"
+    goto :eof
+)
 
-rem --- Fallback to System Python ---
-echo [INFO] Venv not found, checking system python...
-python --version >nul 2>&1
-if errorlevel 1 goto :no_python
+rem --- 2. Probe Python 3.10/3.11/3.12 via the py launcher (newest first) ---
+echo [INFO] Venv not found, probing for Python 3.10-3.12...
 
-echo [INFO] Using System Python.
-powershell -Command "python launcher.py | Tee-Object -FilePath logs\startup_bat.log"
-goto :eof
+py -3.12 -c "import sys" >nul 2>&1
+if not errorlevel 1 (
+    set FOUND_PY=-3.12
+    goto :found
+)
 
-:found_venv
-echo [INFO] Detected Virtual Environment. Using venv python.
-powershell -Command ".'venv\Scripts\python.exe' launcher.py | Tee-Object -FilePath logs\startup_bat.log"
-goto :eof
+py -3.11 -c "import sys" >nul 2>&1
+if not errorlevel 1 (
+    set FOUND_PY=-3.11
+    goto :found
+)
 
-:no_python
-echo [ERROR] Python not found!
-echo Please install Python 3.8+ and add to PATH.
+py -3.10 -c "import sys" >nul 2>&1
+if not errorlevel 1 (
+    set FOUND_PY=-3.10
+    goto :found
+)
+
+rem --- 3. Default python on PATH with acceptable version? (plain `python` often
+rem        maps to a Microsoft Store stub or 3.13+, so we gate explicitly) ---
+py -3 -c "import sys" >nul 2>&1
+if not errorlevel 1 (
+    set FOUND_PY=-3
+    goto :found
+)
+
+echo [ERROR] 未找到 Python 3.10 - 3.12！
+echo.
+echo 本软件需要 Python 3.10 / 3.11 / 3.12（暂不支持 3.13+，部分 AI 依赖没有对应版本）。
+echo 请从以下地址下载安装，并勾选 "Add python.exe to PATH":
+echo     https://www.python.org/downloads/release/python-31011/
+echo.
+start "" "https://www.python.org/downloads/release/python-31011/"
 exit /b 1
+
+:found
+echo [INFO] Using py %FOUND_PY%
+powershell -Command "& py %FOUND_PY% launcher.py 2>&1 | Tee-Object -FilePath logs\startup_bat.log"
+goto :eof

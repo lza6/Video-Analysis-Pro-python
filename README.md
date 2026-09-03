@@ -183,31 +183,40 @@ Video-Analysis-Pro/
 ├── 📂 src/                           # 源代码核心目录
 │   ├── 📂 core/                      # 核心逻辑
 │   │   ├── logic.py                  # 视频/音频/LLM 处理主逻辑
-│   │   ├── agent_tools.py            # Agent 工具集 (OCR, 搜索等)
-│   │   └── history_manager.py        # SQLite 历史记录管理
+│   │   ├── agent_tools.py            # Agent 工具集 (8 个工具 + KB 搜索)
+│   │   ├── history_manager.py        # SQLite + ChromaDB 跨视频知识库
+│   │   └── kb_indexer.py             # v4.5 知识库索引器 (QThread)
 │   ├── 📂 ui/                        # 界面代码 (PyQt6)
 │   │   ├── main_window.py            # 主窗口入口
-│   │   ├── agent_panel.py            # AI 对话侧边栏
-│   │   ├── status_console.py         # 底部状态控制台
-│   │   ├── thinking_widget.py        # AI 思考过程可视化组件
+│   │   ├── agent_panel.py            # AI 对话侧边栏 (DeepSeek 式思考)
+│   │   ├── status_console.py         # 底部状态+资源监控(RAM/VRAM/模型MB)
 │   │   ├── carousel_widget.py        # 画廊轮播组件
-│   │   └── custom_widgets.py         # 其他自定义组件
+│   │   ├── timeline_widget.py        # 视频时间轴 (波形+帧标记)
+│   │   ├── video_player_dialog.py    # 专业播放器 (AI 叠加层)
+│   │   ├── model_manager_tab.py      # 模型下载/校验管理
+│   │   ├── help_dialog.py            # 使用说明
+│   │   └── api_intro_page.py         # API 获取指南
+│   ├── 📂 server/                    # v4.5 Headless 服务 (Docker)
+│   │   └── headless.py               # HTTP /analyze + /healthz
 │   └── 📂 utils/                     # 工具类
-│       ├── config_loader.py          # 配置加载器
-│       ├── constants.py              # 常量定义
-│       └── helpers.py                # 辅助函数
+│       ├── config_manager.py         # 配置+API Key 密钥环存储
+│       ├── constants.py              # 常量与版本(4.5.0)
+│       └── ui_components.py          # tkinter 安装向导
 ├── 📂 models/                        # 存放本地模型文件 (.pt, .gguf)
-├── 📂 config/                        # 配置文件和提示词模板
-│   ├── default_config.yaml           # 默认配置
-│   └── prompts/                      # 提示词模板目录
+├── 📂 config/prompts/frame_analysis/ # 提示词模板 (video_summary/describe)
 ├── 📂 logs/                          # 运行日志
-├── 📂 cache/                         # 视频分析缓存数据
-├── launcher.py                       # 🚀 主启动脚本 (环境检查与启动)
+├── 📂 tests/                         # v4.5 测试套件 (59 tests)
+├── launcher.py                       # 🚀 主启动脚本 (版本门禁+venv)
 ├── debug_launcher.py                 # 调试启动脚本
-├── requirements.txt                  # Python 依赖列表
-├── 启动应用.bat                      # Windows 一键启动脚本
-├── README.md                         # 项目说明文档
-└── LICENSE                           # GPLv3 开源协议
+├── requirements.txt                  # 核心依赖 (分层)
+├── requirements-ocr.txt              # 可选 OCR 依赖
+├── build_windows.spec                # PyInstaller 打包配置
+├── Dockerfile / Dockerfile.cuda      # Docker 镜像 (CPU/GPU)
+├── docker-compose.yml                # 编排 (含 GPU profile)
+├── 启动应用.bat                      # Windows 启动 (py 版本探测)
+├── 启动应用.sh                       # Linux/macOS 启动
+├── CHANGELOG.md                      # 变更日志
+└── README.md                         # 项目说明文档
 ```
 
 ---
@@ -259,7 +268,7 @@ Video-Analysis-Pro/
 
 我们计划将 Video Analysis Pro 打造成**全能的本地多媒体大脑**。
 
-*   **v4.5:** 加入向量数据库 (ChromaDB) 支持，实现跨视频的知识库搜索（例如："帮我找找过去一年所有视频里出现过的红色跑车"）。
+*   **v4.5 ✅ 已发布 (2026-09-03):** 跨视频向量知识库 (ChromaDB 全局 collection + 自然语言跨视频搜索 + Agent search_kb 工具)、可分发软件包 (PyInstaller onedir + 内置 FFmpeg)、Docker 部署 (CPU/CUDA + headless HTTP 服务)、跨平台入口 (Win/Linux/macOS)、API Key 密钥环存储 + 模型 SHA256 校验、全部 P0/P1 修复 + 59 个 E2E 测试。详见 `CHANGELOG.md`。
 *   **v5.0:** 引入语音克隆 (TTS)，让生成的总结报告可以 "读" 出来。
 *   **长期目标:** 实现完全的插件化系统，让社区开发者可以上传自己的分析插件。
 
@@ -282,4 +291,4 @@ Video-Analysis-Pro/
 *(Project maintained by lza6)*
 
 ---
-*文档最后更新：2025年12月30日 09:45:30*
+*文档最后更新：2026-09-03 (v4.5.0)*

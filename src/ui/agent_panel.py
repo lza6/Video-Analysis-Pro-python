@@ -96,13 +96,9 @@ class ChatBubble(QFrame):
         if is_user:
             bg_color = "#DCF8C6"  # WhatsApp Green
             text_color = "#000000"
-            border_radius = "15px 15px 0px 15px"
-            margin = "margin-left: 50px;"
         else:
             bg_color = "#FFFFFF"
             text_color = "#333333"
-            border_radius = "15px 15px 15px 0px"
-            margin = "margin-right: 50px;"
             
         self.setStyleSheet(f"""
             QFrame {{
@@ -226,13 +222,6 @@ class ChatBubble(QFrame):
         QApplication.clipboard().setText(self.lbl_text.text())
 
     def delete_me(self):
-        # Remove the wrapper layout from the parent list
-        # Standard Qt way to remove wrapper widget:
-        parent = self.parentWidget() 
-        # parent is likely the widget inside the scroll area or the wrapper widget
-        # If we wrapped this bubble in a layout item, we need to remove THAT.
-        # But 'setParent(None)' usually works for the widget itself.
-        # We need to signal the panel to remove the Row layout.
         self.setParent(None)
         self.deleteLater()
         
