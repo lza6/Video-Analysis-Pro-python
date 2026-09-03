@@ -1,6 +1,5 @@
-from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QScrollArea, 
-                             QPushButton, QFrame, QSizePolicy, QGraphicsOpacityEffect)
-from PyQt6.QtCore import Qt, QSize, QPropertyAnimation, QEasingCurve, QPoint
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QScrollArea, QPushButton, QFrame
+from PyQt6.QtCore import Qt
 
 class CarouselWidget(QWidget):
     """

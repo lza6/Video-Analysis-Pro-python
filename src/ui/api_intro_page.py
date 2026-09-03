@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QTextBrowser, QPushButton, QHBoxLayout
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QDesktopServices
 
 class APIIntroPage(QWidget):

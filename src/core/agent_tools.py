@@ -1,7 +1,6 @@
 import json
-import logging
 from pathlib import Path
-from typing import Callable, Any, Dict, List
+from typing import Callable, Dict
 
 class Tool:
     def __init__(self, name: str, description: str, func: Callable, schema: Dict = None):

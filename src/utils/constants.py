@@ -1,6 +1,5 @@
 
 import sys
-import os
 
 # Application Info
 APP_NAME = "Video Analysis Pro"

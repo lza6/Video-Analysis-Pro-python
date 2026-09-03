@@ -1,6 +1,5 @@
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QProgressBar, QFrame, QScrollArea, QGridLayout
-from PyQt6.QtCore import Qt, pyqtSignal
-from pathlib import Path
+from PyQt6.QtCore import pyqtSignal
 
 class ModelCard(QFrame):
     download_requested = pyqtSignal(str) # model_id
@@ -50,8 +49,8 @@ class ModelCard(QFrame):
 
     def set_actual_size(self, file_path):
         """用模型文件的真实磁盘大小替换'预计大小'。"""
-        from pathlib import Path
-        p = Path(file_path)
+        from pathlib import Path as _P
+        p = _P(file_path)
         if p.exists():
             size_mb = p.stat().st_size / 1024 / 1024
             self.lbl_size.setText(f"实际占用: {size_mb:.1f} MB")

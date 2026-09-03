@@ -1,8 +1,8 @@
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, 
-                             QLineEdit, QPushButton, QFrame, QScrollArea, QComboBox, 
-                             QProgressBar, QSizePolicy, QGraphicsDropShadowEffect)
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer, QPropertyAnimation, QEasingCurve
-from PyQt6.QtGui import QFont, QColor, QPalette, QIcon, QPixmap, QCursor
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit,
+                             QPushButton, QFrame, QScrollArea, QComboBox,
+                             QProgressBar, QGraphicsDropShadowEffect)
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtGui import QFont, QColor, QPixmap, QCursor
 
 class ThinkingWidget(QFrame):
     """DeepSeek R1 style collapsible thinking block."""

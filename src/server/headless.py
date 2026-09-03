@@ -7,7 +7,6 @@
 启动: python -m src.server.headless [--port 8000]
 """
 import argparse
-import io
 import json
 import logging
 import os
@@ -19,14 +18,12 @@ from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import cv2
-import numpy as np
 import requests
 
 from src.core.logic import (VideoProcessor, AudioProcessor, VideoAnalyzer,
-                            OllamaClient, PromptLoader, ModelContextManager,
+                            OllamaClient, PromptLoader,
                             CLIP_AVAILABLE, NVIDIA_GPU_AVAILABLE,
                             ADVANCED_FEATURES_AVAILABLE, FFMPEG_AVAILABLE)
-from src.core.history_manager import HistoryManager
 
 logger = logging.getLogger("headless")
 

@@ -1,33 +1,22 @@
 import sys
 import os
 import tkinter as tk
-from tkinter import messagebox, simpledialog, scrolledtext
+from tkinter import messagebox
 import logging
 import subprocess
 import shutil
 import time
-from datetime import datetime, timezone, timedelta
-import webbrowser
-import threading
-import json
-import random
-from typing import Dict, List, Optional, Tuple, Any, Callable
-import io
-import traceback
+from typing import Dict, Optional, Tuple
 from logging.handlers import RotatingFileHandler
 
 # =====================================================================================
 # 核心常量和配置 (Core Constants and Configuration)
 # =====================================================================================
 from src.utils.constants import (
-    APP_NAME, VENV_SUBDIR_NAME, USER_VALIDATION_FILE_NAME, INITIAL_SYS_EXECUTABLE,
-    DEFAULT_THEME_NAME, MAX_CONSECUTIVE_TASK_FAILURES_BEFORE_RESET, MAX_ITERATION_RETRIES,
-    MAX_RESPONSE_LENGTH, RESOURCE_MONITOR_INTERVAL, FULL_TEXT_DUPLICATION_CHECK_INTERVAL,
-    THEMES, REQUIRED_PACKAGES, CONFIG_DIR, LOG_DIR, MAIN_CONFIG_FILENAME
+    APP_NAME, USER_VALIDATION_FILE_NAME, INITIAL_SYS_EXECUTABLE,
+    DEFAULT_THEME_NAME, THEMES,
+    REQUIRED_PACKAGES, CONFIG_DIR, LOG_DIR, MAIN_CONFIG_FILENAME,
 )
-
-# --- 应用版本 (single source of truth: src/utils/constants.py) ---
-from src.utils.constants import APP_VERSION
 
 # =====================================================================================
 # 辅助函数和工具 (Helper Functions & Utilities)
@@ -342,7 +331,6 @@ if __name__ == "__main__":
         logging.info("需要完整的环境设置。启动设置向导。" )
         try:
             from src.utils.ui_components import EnvironmentSetupWindow, InitialThemeSelectorDialog
-            from src.utils.constants import THEMES, DEFAULT_THEME_NAME
         except ImportError as e:
             logging.critical(f"无法导入UI组件进行设置: {e}", exc_info=True)
             root_err = tk.Tk(); root_err.withdraw()

@@ -6,7 +6,7 @@ import subprocess
 import sys
 import os
 import venv
-from src.utils.constants import REQUIRED_PACKAGES, APP_NAME, VENV_SUBDIR_NAME, INITIAL_SYS_EXECUTABLE
+from src.utils.constants import REQUIRED_PACKAGES, APP_NAME, VENV_SUBDIR_NAME
 from src.utils.config_manager import ConfigurationManager
 import logging
 

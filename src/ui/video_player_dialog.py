@@ -1,10 +1,10 @@
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
-                             QLabel, QSlider, QFrame, QGraphicsView, QGraphicsScene)
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QRectF, QSize, QSizeF
+                             QSlider, QGraphicsView, QGraphicsScene)
+from PyQt6.QtCore import Qt, QUrl, QRectF, QSizeF
 from PyQt6.QtMultimedia import QMediaPlayer
-from PyQt6.QtMultimediaWidgets import QVideoWidget, QGraphicsVideoItem
+from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 from src.ui.timeline_widget import TimelineWidget
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush
+from PyQt6.QtGui import QPainter, QColor, QPen
 
 class VideoPlayerDialog(QDialog):
     def __init__(self, video_path, parent=None, frames=None):

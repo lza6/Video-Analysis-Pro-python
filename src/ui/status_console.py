@@ -1,6 +1,5 @@
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QFrame, QScrollArea, QSizePolicy
-from PyQt6.QtCore import Qt, QTimer, QSize
-from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QFrame, QScrollArea
+from PyQt6.QtCore import QTimer
 import psutil
 import time
 

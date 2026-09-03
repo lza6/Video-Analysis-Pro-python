@@ -1,6 +1,6 @@
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QToolTip
-from PyQt6.QtCore import Qt, pyqtSignal, QRect, QPoint, QSize
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QPainterPath
+from PyQt6.QtWidgets import QWidget, QToolTip
+from PyQt6.QtCore import Qt, pyqtSignal, QPoint
+from PyQt6.QtGui import QPainter, QColor, QPen, QPainterPath
 
 class InteractionMarker:
     def __init__(self, timestamp, type_name, color, description=""):

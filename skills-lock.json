@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "skills": {
+    "machine-learning": {
+      "source": "pluginagentmarketplace/custom-plugin-python",
+      "sourceType": "autoskills-registry",
+      "computedHash": "2381439c0d230fad40ead759b6820ecf58f189c4dfc0f446369fea93cfec40ff"
+    },
+    "pandas-data-analysis": {
+      "source": "pluginagentmarketplace/custom-plugin-python",
+      "sourceType": "autoskills-registry",
+      "computedHash": "612eb33d227296b4bdd0ca62785b2e31124a92adf5f40b730b0cf3713adc6f04"
+    },
+    "python-executor": {
+      "source": "inferen-sh/skills",
+      "sourceType": "autoskills-registry",
+      "computedHash": "bd2d874c27788964fadf03c0840049de0409407f06f883ee90886164cb22ef69"
+    },
+    "python-patterns": {
+      "source": "affaan-m/everything-claude-code",
+      "sourceType": "autoskills-registry",
+      "computedHash": "5c344cc64b19a9a7aecb9b5fa977175acd8e55a169f86901d28eb57c637869b4"
+    },
+    "python-testing-patterns": {
+      "source": "wshobson/agents",
+      "sourceType": "autoskills-registry",
+      "computedHash": "07b87d62993c0b6159a91d18fc8723b7f4c13d5000c0984266c207493ce641ff"
+    }
+  }
+}

@@ -1,7 +1,6 @@
 import sys
 import os
 import logging
-import json
 import requests
 import time
 import psutil
@@ -22,19 +21,18 @@ except OSError:
     torch = None  # Headless/CPU-broken environments must still be able to show the UI
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-                             QLabel, QTabWidget, QPushButton, QTextEdit, QFileDialog,
-                             QProgressBar, QComboBox, QCheckBox, QSlider, QGroupBox, QSplitter,
-                             QScrollArea, QToolBox, QSizePolicy, QFrame, QGridLayout)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize, QDateTime
-from PyQt6.QtGui import QIcon, QAction, QPixmap
+                             QLabel, QTabWidget, QPushButton, QTextEdit,
+                             QProgressBar, QComboBox, QCheckBox, QSlider, QGroupBox,
+                             QScrollArea, QSizePolicy, QFrame)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtGui import QPixmap
 from logging.handlers import RotatingFileHandler
 import qdarktheme
 
-# ... (Previous imports remain) ...
-from src.core.logic import (VideoProcessor, VideoAnalyzer, AudioProcessor, PromptLoader, 
-                        APIGatewayClient, ModelContextManager,
-                        logger as core_logger, Frame, AudioTranscript,
-                        ADVANCED_FEATURES_AVAILABLE, NVIDIA_GPU_AVAILABLE)
+from src.core.logic import (VideoProcessor, AudioProcessor, PromptLoader,
+                        ModelContextManager,
+                        logger as core_logger,
+                        NVIDIA_GPU_AVAILABLE)
 from src.utils.constants import APP_NAME, APP_VERSION, LOG_DIR
 from src.utils.config_manager import ConfigurationManager
 from src.core.agent_tools import (ToolRegistry, create_get_video_meta_tool, 
@@ -42,7 +40,7 @@ from src.core.agent_tools import (ToolRegistry, create_get_video_meta_tool,
                                   create_search_web_tool, create_visual_search_tool, create_ocr_tool)
 import cv2 # For thumbnails
 from src.ui.status_console import StatusConsole
-from PyQt6.QtCore import QRunnable, QThreadPool, QObject, pyqtSignal
+from PyQt6.QtCore import QRunnable, QThreadPool, QObject
 from src.ui.agent_panel import AgentPanel
 from src.ui.model_manager_tab import ModelManagerTab
 from src.ui.api_intro_page import APIIntroPage
@@ -244,7 +242,7 @@ class ChatWorker(QThread):
                         
                         tool_output_block = f"\n\nObservation: [工具返回结果]\n{result}\n"
                         self.chunk_received.emit(f"✅ 工具返回: {str(result)[:100]}...\n")
-                        self.chunk_received.emit(f"\n🤖 正在根据结果思考下一步...\n")
+                        self.chunk_received.emit("正在根据结果思考下一步")
                         
                         # Add to context
                         current_prompt = f"{current_prompt}\n\nAgent: {full_response}\n{tool_output_block}\nSystem: 请基于以上观察继续回答用户。"
@@ -1234,21 +1232,6 @@ class DesktopApp(QMainWindow):
         if hasattr(self, 'loading_overlay') and self.loading_overlay.isVisible():
             self.loading_overlay.show_msg(f"正在下载必要组件: {model_id}...", percent)
 
-    def on_download_finished(self, model_id, success):
-        self.check_local_models()
-        if success:
-            logging.info(f"✅ 模型 {model_id} 下载完成")
-        else:
-            logging.info(f"❌ 模型 {model_id} 下载失败")
-        
-        if hasattr(self, 'loading_overlay') and self.loading_overlay.isVisible():
-            self.loading_overlay.hide()
-            from PyQt6.QtWidgets import QMessageBox
-            if success:
-                QMessageBox.information(self, "组件更新", f"必要组件 {model_id} 已下载并就绪。")
-            else:
-                QMessageBox.warning(self, "组件更新", f"必要组件 {model_id} 下载失败，可能会影响分析。")
-
     def _verify_model_integrity(self, model_id: str):
         """模型文件 SHA256 完整性校验（供应链安全）。"""
         logging.info(f"正在校验 {model_id} 的完整性...")
@@ -1531,7 +1514,7 @@ class DesktopApp(QMainWindow):
                  except: pass
 
     def on_api_url_changed(self):
-        from src.core.logic import APIGatewayClient
+        from src.core.logic import APIGatewayClient  # noqa: 用于 parse_endpoint
         url = self.txt_api_url.toPlainText().strip()
         if not url:
             self.lbl_api_preview.setText("")
@@ -1546,7 +1529,6 @@ class DesktopApp(QMainWindow):
             self.lbl_api_preview.setStyleSheet("color: #4CAF50; font-style: italic;")
 
     def check_api_connection(self):
-        from src.core.logic import APIGatewayClient
         url = self.txt_api_url.toPlainText().strip()
         key = self.txt_api_key.toPlainText().strip()
         
@@ -1584,13 +1566,6 @@ class DesktopApp(QMainWindow):
         
         # Reset button text after 2s
         QTimer.singleShot(2000, lambda: self.btn_check_api.setText("🔍 检测连接 & 获取模型"))
-
-    def plot_metrics(self, frames):
-        try:
-            logging.info("正在生成高级画质分析图表...")
-            QTimer.singleShot(100, lambda: self._generate_plot_internal())
-        except Exception as e:
-            logging.info(f"绘图准备失败: {e}")
 
     def _generate_plot_internal(self):
         try:
@@ -1780,9 +1755,7 @@ class DesktopApp(QMainWindow):
     def load_video_from_path(self, path):
         """Handle video file loading from drag & drop or selection"""
         from pathlib import Path
-        from PyQt6.QtGui import QDesktopServices
-        from PyQt6.QtCore import QUrl
-        
+
         path_obj = Path(path)
         if path_obj.exists() and path_obj.suffix.lower() in ['.mp4', '.avi', '.mov', '.mkv']:
             self.video_path = path_obj
@@ -1861,7 +1834,7 @@ class DesktopApp(QMainWindow):
             self.btn_load_model.setText("⏳ 正在载入核心组件...")
             self.btn_load_model.setEnabled(False)
             logging.info(f"正在后台初始化分析器: {model_name}...")
-            logging.info(f"注意: 系统将同时加载本地辅助模型 'all-MiniLM' 用于语义分析，这与您的 API 模型无关。")
+            logging.info("注意: 系统将同时加载本地辅助模型 'all-MiniLM' 用于语义分析，这与您的 API 模型无关。")
 
             if client_idx == 0:
                 from src.core.logic import OllamaClient
@@ -1981,7 +1954,7 @@ class DesktopApp(QMainWindow):
             self.status_console.finish_task("Phase 3: 生成摘要媒体", False)
             return
             
-        logging.info(f"✅ 摘要媒体生成成功。")
+        logging.info("✅ 摘要媒体生成成功。")
         self.status_console.finish_task("Phase 3: 生成摘要媒体", True)
         self.agent_panel.update_thoughts("所有任务已完成。")
         self.tabs.setCurrentWidget(self.tab_media)
@@ -2008,10 +1981,9 @@ class DesktopApp(QMainWindow):
 
     def populate_media_gallery(self, file_paths):
         self.media_carousel.clear()
-        
-        from PyQt6.QtGui import QDesktopServices, QPixmap
-        from PyQt6.QtCore import QUrl
-        
+
+        from PyQt6.QtGui import QPixmap
+
         for path_str in file_paths:
             path = Path(path_str)
             if not path.exists(): continue
@@ -2283,7 +2255,7 @@ class DesktopApp(QMainWindow):
         if transcript_text:
             transcript_text = transcript_text[:2000] + "..."
 
-        context_str = f"--- System Context ---\n"
+        context_str = "--- System Context ---\n"
         context_str += f"Current Video: {video_name}\n"
         context_str += f"Duration: {duration:.2f} seconds\n"
         context_str += f"Recognized Transcript:\n{transcript_text}\n" if transcript_text else "No transcript available.\n"

@@ -7,39 +7,35 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Iterator, Tuple
 import requests
 import cv2
-import time
-import psutil
 import threading
 import numpy as np
 import torch
 from collections import Counter
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import traceback
 from dataclasses import dataclass, field
-import io
 import base64
 import subprocess
 import hashlib
-import pickle
 
-# Optional imports
+# Optional dependency probes — 使用 importlib 只探测不绑定，
+# 实际使用处（filter_frames_semantically / extract_smart_keyframes 等）再做局部 import。
+import importlib.util as _ilu
+
+
+def _probe(module: str) -> bool:
+    return _ilu.find_spec(module) is not None
+
+
+SCENEDETECT_AVAILABLE = _probe("scenedetect")
 try:
-    from scenedetect import detect, AdaptiveDetector
-except ImportError:
-    pass
-try:
-    from PIL import Image
-    from sentence_transformers import SentenceTransformer, util
+    from PIL import Image  # noqa: F401  (used by semantic dedup / KB indexer)
+    from sentence_transformers import SentenceTransformer, util  # noqa: F401
     CLIP_AVAILABLE = True
 except ImportError:
     CLIP_AVAILABLE = False
 
-try:
-    from decord import VideoReader, cpu, gpu
-    DECORD_AVAILABLE = True
-except ImportError:
-    DECORD_AVAILABLE = False
+DECORD_AVAILABLE = _probe("decord")
 try:
     import pynvml
     pynvml.nvmlInit()
@@ -81,11 +77,7 @@ def _detect_advanced_features() -> bool:
 
 ADVANCED_FEATURES_AVAILABLE = _detect_advanced_features()
 
-try:
-    from pymediainfo import MediaInfo
-    MEDIAINFO_AVAILABLE = True
-except ImportError:
-    MEDIAINFO_AVAILABLE = False
+MEDIAINFO_AVAILABLE = _probe("pymediainfo")
 
 GPU_LOCK = threading.Lock()
 
@@ -233,10 +225,9 @@ class VideoProcessor:
         return local_frames
 
     def extract_smart_keyframes(self, min_scene_len: int = 15) -> List[Frame]:
-        try:
-            from scenedetect import detect, AdaptiveDetector
-        except ImportError:
+        if not SCENEDETECT_AVAILABLE:
             return self.extract_keyframes(0.2, max_frames=200)
+        from scenedetect import detect, AdaptiveDetector
 
         scene_list = detect(str(self.video_path), AdaptiveDetector(min_scene_len=min_scene_len))
         extracted_frames = []
