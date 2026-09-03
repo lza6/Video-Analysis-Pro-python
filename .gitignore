@@ -33,3 +33,6 @@ crash_debug.txt
 .junie/
 .kiro/
 node_modules/
+config/history.db
+config/chroma_db/
+config/app_config.ini
