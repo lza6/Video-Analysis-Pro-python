@@ -101,7 +101,7 @@ class ConfigurationManager:
         try:
             with open(self.presets_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except:
+        except Exception:
             return []
 
     def save_api_presets(self, presets):
@@ -124,7 +124,7 @@ class ConfigurationManager:
         try:
             with open(self.prompts_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except:
+        except Exception:
             return []
 
     def save_prompts(self, prompts):

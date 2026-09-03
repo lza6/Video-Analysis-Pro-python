@@ -1,5 +1,8 @@
+<p align="center"><img src="resources/logo_256.png" alt="听风公司" width="160"/></p>
+
 # 🎬 Video Analysis Pro (Python Edition)
 ## 您的私人 AI 视频深度分析专家 | Your Personal AI Video Analyst
+### 由 听风公司 (Tingfeng) 出品
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-yellow.svg)](https://www.python.org/)

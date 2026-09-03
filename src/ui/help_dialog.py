@@ -38,6 +38,7 @@ class HelpDialog(QDialog):
         </style>
         
         <h1>🎬 Video Analysis Pro：小白从零到一上手指南</h1>
+        <p style="text-align:center; color: #888;"><b>听风公司</b> 出品 · v4.5.0</p>
         
         <div class="box">
             <b>这是什么？</b><br>

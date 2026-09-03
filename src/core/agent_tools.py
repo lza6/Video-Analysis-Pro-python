@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
-from typing import Callable, Dict
+from typing import Callable, Dict, Optional
 
 class Tool:
-    def __init__(self, name: str, description: str, func: Callable, schema: Dict = None):
+    def __init__(self, name: str, description: str, func: Callable, schema: Optional[Dict] = None):
         self.name = name
         self.description = description
         self.func = func
@@ -20,7 +20,7 @@ class ToolRegistry:
         self._tools: Dict[str, Tool] = {}
         self._context_provider: Callable = None # Function to get current app context
 
-    def register_tool(self, name: str, description: str, func: Callable, schema: Dict = None):
+    def register_tool(self, name: str, description: str, func: Callable, schema: Optional[Dict] = None):
         self._tools[name] = Tool(name, description, func, schema)
 
     def set_context_provider(self, provider: Callable):

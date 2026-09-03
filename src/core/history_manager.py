@@ -176,7 +176,7 @@ class HistoryManager:
                 n_results=top_k
             )
             return results
-        except:
+        except Exception:
             return []
 
     def add_session(self, video_path: str, output_dir: str, summary: str = "", status: str = 'completed'):
@@ -227,7 +227,8 @@ class HistoryManager:
                 if out_dir.exists() and out_dir.is_dir():
                     try:
                         shutil.rmtree(out_dir)
-                    except: pass
+                    except Exception as e:
+                        logging.warning(f"删除会话目录失败 (文件可能被占用): {e}")
 
                 cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
                 cursor.execute("DELETE FROM checkpoints WHERE session_id = ?", (session_id,))

@@ -17,6 +17,7 @@ block_cipher = None
 
 datas = [
     ("config", "config"),
+    ("resources", "resources"),
 ]
 binaries = []
 hiddenimports = []
@@ -86,6 +87,7 @@ exe = EXE(
     upx=False,
     console=False,          # GUI 应用不出黑窗口
     disable_windowed_traceback=False,
+    icon="resources/app_icon.ico",  # 听风公司 logo
 )
 
 coll = COLLECT(

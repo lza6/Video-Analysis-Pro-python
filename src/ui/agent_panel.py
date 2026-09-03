@@ -408,8 +408,8 @@ class AgentPanel(QFrame):
 
     def inject_context(self, context_text):
         """Injects a system/context message into the chat history without sending it to the model yet."""
-        # Visual feedback
-        self.append_message("System", "已更新视频分析上下文信息。", is_user=False)
+        # Visual feedback（context_text 的实际注入由 main_window 注入 prompt 完成）
+        self.append_message("System", f"已更新视频分析上下文信息 ({len(context_text)} 字符)。", is_user=False)
         self.lbl_thoughts.setText("<i>上下文已更新，AI 已知悉视频内容。</i>")
         
         # We can store it or emit it? 

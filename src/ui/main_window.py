@@ -63,7 +63,7 @@ class ImageLoader(QRunnable):
                 # 预先缩放，减少主线程内存压力
                 scaled = pix.scaled(220, 140, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                 self.signals.loaded.emit(self.frame, scaled)
-        except: pass
+        except Exception: pass
 
 class QtLogHandler(logging.Handler):
     def __init__(self, signal):
@@ -428,6 +428,7 @@ class DesktopApp(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
         self.resize(1400, 900)
+        self._apply_app_icon()
         
         # Setup Logging
         self.log_handler = QtLogHandler(self.log_signal)
@@ -442,7 +443,7 @@ class DesktopApp(QMainWindow):
         temp_log = os.path.join(abs_log_dir, "main_app.log")
         if os.path.exists(temp_log):
             try: os.remove(temp_log)
-            except: pass
+            except Exception: pass
 
         self.file_handler = RotatingFileHandler(
             master_log_path, 
@@ -560,7 +561,7 @@ class DesktopApp(QMainWindow):
                 used_gb = mem.used / 1024**3
                 total_gb = mem.total / 1024**3
                 self.status_bar.showMessage(f"VRAM: {used_gb:.1f}G / {total_gb:.1f}G  | CPU: {psutil.cpu_percent()}%")
-        except: pass
+        except Exception: pass
 
     def setup_ui(self):
         # Main Layout
@@ -1511,7 +1512,7 @@ class DesktopApp(QMainWindow):
                      gpu_util = status.get('gpu_util', 0)
                      self.grp_ollama.setTitle(f"Ollama (Local) - GPU: {gpu_util}% | VRAM: {vram_used:.1f}/{vram_total:.1f} GB")
                      self.status_console.resource_monitor.update_vram(vram_used, vram_total)
-                 except: pass
+                 except Exception: pass
 
     def on_api_url_changed(self):
         from src.core.logic import APIGatewayClient  # noqa: 用于 parse_endpoint
@@ -1632,6 +1633,24 @@ class DesktopApp(QMainWindow):
             self.agent_panel.combo_model.blockSignals(True)
             self.agent_panel.combo_model.setCurrentText(text)
             self.agent_panel.combo_model.blockSignals(False)
+
+    def _apply_app_icon(self):
+        """设置应用图标 (听风公司 logo)。窗口图标 + QApplication 图标。"""
+        try:
+            from PyQt6.QtGui import QIcon
+            icon_path = Path(__file__).parent.parent.parent / "resources" / "logo_256.png"
+            if not icon_path.exists():
+                # 打包环境: resources 与 exe 同级
+                icon_path = Path("resources") / "logo_256.png"
+            if icon_path.exists():
+                icon = QIcon(str(icon_path))
+                self.setWindowIcon(icon)
+                if QApplication.instance():
+                    QApplication.instance().setWindowIcon(icon)
+            else:
+                logging.debug(f"应用图标未找到: {icon_path}")
+        except Exception as e:
+            logging.debug(f"应用图标加载失败: {e}")
 
     def init_backend(self):
         self.analyzer = None
@@ -2292,6 +2311,12 @@ def run_main():
         qdarktheme.enable_hi_dpi()
         app = QApplication(sys.argv)
         qdarktheme.setup_theme("dark")
+
+        # 应用图标 (听风公司 logo)
+        from PyQt6.QtGui import QIcon
+        icon_path = Path("resources") / "logo_256.png"
+        if icon_path.exists():
+            app.setWindowIcon(QIcon(str(icon_path)))
         
         # Check for local ffmpeg override
         models_dir = Path("models").resolve()
@@ -2313,7 +2338,7 @@ def run_main():
         try:
             with open("crash_log.txt", "w", encoding="utf-8") as f:
                 f.write(error_msg)
-        except: pass
+        except Exception: pass
         
         try:
              from PyQt6.QtWidgets import QMessageBox, QApplication
@@ -2322,7 +2347,7 @@ def run_main():
              else:
                  app = QApplication.instance()
              QMessageBox.critical(None, "Application Startup Failed", error_msg)
-        except:
+        except Exception:
              pass
         return 1
 

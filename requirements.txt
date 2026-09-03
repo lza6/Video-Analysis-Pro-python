@@ -24,13 +24,13 @@ faster-whisper>=1.0.0
 sentence-transformers>=2.3.0   # 2.2.2 与新版 huggingface_hub 不兼容
 
 # --- Persistence / utils ---
-chromadb
+chromadb>=1.5.9     # CVE-2026-45830/31/33 已修复
 markdown2
 requests
 psutil
 pymediainfo
 pydub                  # 静音检测 + 波形提取（缺失时会静默降级）
-pillow
+pillow>=12.3.0      # 12.x 修复多个图像解析 CVE (PYSEC-2026-165 等)
 nvidia-ml-py           # NVIDIA GPU 监控；无 GPU 时自动跳过
 
 # --- Agent tools (web search) ---

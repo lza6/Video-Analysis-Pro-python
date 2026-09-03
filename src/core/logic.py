@@ -341,7 +341,7 @@ class ModelManager:
     def __init__(self, models_dir: Path = Path("models")):
         self.models_dir = models_dir
         self.models_dir.mkdir(parents=True, exist_ok=True)
-        self.download_threads = {}
+        self.download_threads: Dict[str, Any] = {}
 
     def get_model_path(self, model_id: str) -> Optional[Path]:
         # Mapping for specific internal components
@@ -502,6 +502,9 @@ class AudioProcessor:
             return None
 
     def transcribe(self, audio_path: Path, diarize: bool = False) -> Optional[AudioTranscript]:
+        if diarize:
+            # 说话人分离 (pyannote) 未接入：v4.5 保持接口占位，显式声明避免静默忽略
+            logger.info("diarize=True 请求被忽略: 说话人分离将在后续版本接入。")
         try:
             from faster_whisper import WhisperModel
             
@@ -538,7 +541,8 @@ class AudioProcessor:
             try:
                 logger.info(f"加载 Faster-Whisper ({model_size}) on {device}...")
                 self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
-                
+                assert self.model is not None  # 刚赋值，帮助类型检查器收窄
+
                 # Test transcription to catch lazy-load DLL errors
                 segments, info = self.model.transcribe(str(audio_path), beam_size=5)
                 segments_list = list(segments) 
@@ -561,6 +565,7 @@ class AudioProcessor:
                         compute_type = "int8"
                         logger.info(f"重新加载 Faster-Whisper ({model_size}) on CPU...")
                         self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
+                        assert self.model is not None  # 刚赋值，帮助类型检查器收窄
                         segments, info = self.model.transcribe(str(audio_path), beam_size=5)
                         segments_list = list(segments)
                     except Exception as e2:
@@ -583,7 +588,7 @@ class AudioProcessor:
                 samples = samples / np.max(np.abs(samples))
                 step = len(samples) // 1000 if len(samples) > 1000 else 1
                 waveform = samples[::step]
-            except:
+            except Exception:
                 waveform = None
 
             if self.vram_manager:
@@ -608,7 +613,7 @@ class AudioProcessor:
 
 class PromptLoader:
     def __init__(self, prompt_dir: Optional[str] = None):
-        self.prompts = {}
+        self.prompts: Dict[str, str] = {}
         # The rich, curated prompt templates live under
         # config/prompts/frame_analysis/ (video_summary.txt etc). The old
         # default pointed at config/prompts/, where no files exist, so the
@@ -779,8 +784,9 @@ class APIGatewayClient(BaseAPIClient):
     def chat_stream(self, model: str, prompt: str, image_paths: Optional[List[str]] = None, temperature: float = 0.2, timeout: int = 600) -> Iterator[str]:
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         
-        # Split prompt into System and User if system tags are present
-        messages = []
+        # Split prompt into System and User if system tags are present.
+        # content 可以是 str 或 OpenAI 多模态 parts 列表。
+        messages: List[Dict[str, Any]] = []
         if "--- System Context ---" in prompt:
             parts = prompt.split("--- System Context ---")
             # Try to extract the block
@@ -969,7 +975,7 @@ class VideoAnalyzer:
                 old_yolo = self.model_dir / "yolov8n.pt"
                 if old_yolo.exists():
                     try: os.remove(old_yolo)
-                    except: pass
+                    except Exception: pass
                 
                 # YOLO typically auto-detects, but we can be explicit or just let it fail safely
                 self.yolo_model = YOLO(str(yolo_path))
@@ -990,7 +996,7 @@ class VideoAnalyzer:
         if not CLIP_AVAILABLE:
             try:
                  self.embedder = SentenceTransformer('clip-ViT-B-32')
-            except:
+            except Exception:
                  pass
     
     def unload_models(self):
@@ -1024,7 +1030,7 @@ class VideoAnalyzer:
             detections = [self.yolo_model.names[int(box.cls[0])] for r in results for box in r.boxes if float(box.conf[0]) > 0.5]
             if not detections: return "None"
             return ", ".join([f"{count} {name}" for name, count in Counter(detections).items()])
-        except: return "Error"
+        except Exception: return "Error"
 
     def _process_stream(self, stream_iterator: Iterator[str]) -> Iterator[str]:
         full_response_text = ""
@@ -1045,14 +1051,14 @@ class VideoAnalyzer:
                     try:
                         chunk = json.loads(chunk_str)
                         delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "") or chunk.get("message", {}).get("content", "")
-                    except:
+                    except Exception:
                         # Fallback for non-JSON strings
                         delta = chunk_str
 
                 if delta:
                     full_response_text += delta
                     yield delta
-            except: continue
+            except Exception: continue
         # Historical bug: an internal sentinel "__FULL_RESPONSE_END__<text>"
         # was appended to the stream and leaked verbatim into the rendered
         # report and Agent transcript. The UI layer now accumulates the
@@ -1135,9 +1141,9 @@ def get_advanced_video_metrics(video_path: str, num_frames_to_sample=100):
         return {}, None
     sample_indices = np.linspace(0, total_frames - 1, min(num_frames_to_sample, total_frames), dtype=int)
    
-    metrics_over_time = {'timestamps': [], 'brightness': [], 'saturation': [], 'sharpness': []}
-    frame_durations = []
-    last_timestamp = 0
+    metrics_over_time: Dict[str, List[float]] = {'timestamps': [], 'brightness': [], 'saturation': [], 'sharpness': []}
+    frame_durations: List[float] = []
+    last_timestamp = 0.0
     for idx in sample_indices:
         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ret, frame = cap.read()
@@ -1145,14 +1151,14 @@ def get_advanced_video_metrics(video_path: str, num_frames_to_sample=100):
             continue
        
         timestamp = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
-        metrics_over_time['timestamps'].append(timestamp)
+        metrics_over_time['timestamps'].append(float(timestamp))
        
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
        
-        metrics_over_time['brightness'].append(np.mean(gray))
-        metrics_over_time['saturation'].append(np.mean(hsv[:, :, 1]))
-        metrics_over_time['sharpness'].append(cv2.Laplacian(gray, cv2.CV_64F).var())
+        metrics_over_time['brightness'].append(float(np.mean(gray)))
+        metrics_over_time['saturation'].append(float(np.mean(hsv[:, :, 1])))
+        metrics_over_time['sharpness'].append(float(cv2.Laplacian(gray, cv2.CV_64F).var()))
        
         if last_timestamp > 0:
             duration = timestamp - last_timestamp
