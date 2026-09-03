@@ -200,9 +200,8 @@ class ChatWorker(QThread):
         # New pattern for "Thought:", "Action:", "Observation:"
         react_pattern = re.compile(r'Action:\s*(\w+)\((.*?)\)', re.IGNORECASE)
         
-        current_prompt = self.prompt
-        if "请使用中文总结" not in current_prompt:
-             current_prompt += "\n\n请始终使用中文回答我。"
+        # B2: ReAct 用 messages 列表承载多轮对话，替代字符串累积
+        messages = [{"role": "user", "content": self.prompt}]
              
         max_turns = 10
         
@@ -212,7 +211,7 @@ class ChatWorker(QThread):
                 
                 full_response = ""
                 # Stream content
-                for chunk in self.client.chat_stream(self.model, current_prompt, self.image_paths):
+                for chunk in self.client.chat_stream(self.model, messages, self.image_paths):
                      if not self._is_running: break
                      if chunk:
                          self.chunk_received.emit(chunk)
@@ -249,12 +248,13 @@ class ChatWorker(QThread):
 
                         result = self.tool_registry.execute_tool_call(tool_name, args)
                         
-                        tool_output_block = f"\n\nObservation: [工具返回结果]\n{result}\n"
                         self.chunk_received.emit(f"✅ 工具返回: {str(result)[:100]}...\n")
                         self.chunk_received.emit("正在根据结果思考下一步")
                         
-                        # Add to context
-                        current_prompt = f"{current_prompt}\n\nAgent: {full_response}\n{tool_output_block}\nSystem: 请基于以上观察继续回答用户。"
+                        # B2: 对话历史追加（assistant 回答 + 观察结果），而非字符串拼接
+                        messages.append({"role": "assistant", "content": full_response})
+                        messages.append({"role": "user",
+                                         "content": "Tool " + tool_name + " returned: \n\n" + result + "\n\n请基于以上观察继续回答用户。"},)
                         continue
                         
                     except Exception as e:
@@ -1108,7 +1108,7 @@ class DesktopApp(QMainWindow):
             logging.info(f"预设 '{name}' 已保存")
 
     def clear_api_fields(self):
-        self.txt_api_url.setPlainText("https://api.iflow.cn/v1")
+        self.txt_api_url.setPlainText("")  # P2-4 中立空默认
         self.txt_api_key.clear()
         self.combo_api_model.setEditText("")
         self.combo_presets.setCurrentIndex(0)
@@ -1155,18 +1155,16 @@ class DesktopApp(QMainWindow):
         # Create a new AI bubble for streaming
         self.agent_panel.append_message("Agent", "", model_name=model)
 
-        full_prompt = f"User Question: {text}"
-        if hasattr(self, 'agent_system_context') and self.agent_system_context:
-            full_prompt = f"{self.agent_system_context}\n\nUser Question: {text}"
-        
-        # Inject Tool Definitions if available
-        if hasattr(self, 'tool_registry'):
-            tool_desc = self.tool_registry.get_tool_descriptions()
-            tool_prompt = (f"\n\n[SYSTEM: TOOLS ENABLED]\nYou have access to the following tools:\n{tool_desc}\n"
-                           f"To use a tool, output XML format EXACTLY like this: <tool name=\"tool_name\">{{\"arg\": value}}</tool>\n"
-                           f"Example: <tool name=\"get_frame_details\">{{\"seconds\": 10.5}}</tool>\n"
-                           f"Wait for the <tool_result> block before continuing.\n")
-            full_prompt = f"{tool_prompt}\n{full_prompt}"
+        # P1-1: 模块化 system prompt（CL4R1T4S 六模块架构）
+        from src.core.agent_prompt import build_system_prompt
+        tool_desc = self.tool_registry.get_tool_descriptions() if hasattr(self, 'tool_registry') else ""
+        system_prompt = build_system_prompt(
+            tool_descriptions=tool_desc,
+            context=getattr(self, 'agent_system_context', None),
+        )
+        full_prompt = text
+        if system_prompt:
+            full_prompt = system_prompt + "\n\nUser Question: " + text
 
         # Check if model supports vision. If not, don't send images.
         model_is_vision = False
@@ -1739,6 +1737,15 @@ class DesktopApp(QMainWindow):
             "Locate an object in the video and jump to it. Args: {'query': 'target description'}",
             create_visual_grounding_tool(context_provider),
             {"query": "目标描述"}
+        )
+        # P2-6: 图→帧跨模态搜索（截图找时刻）
+        from src.core.agent_tools import create_image_search_tool
+        self.tool_registry.register_tool(
+            "search_by_image",
+            "Find the moment in the current video that visually matches an uploaded "
+            "image (cross-modal image-to-frame search). Args: {'image_path': '图片路径'}",
+            create_image_search_tool(context_provider),
+            {"image_path": "图片文件路径"}
         )
         # v4.5 跨视频知识库搜索
         from src.core.agent_tools import create_kb_search_tool

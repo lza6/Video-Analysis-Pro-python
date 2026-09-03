@@ -673,10 +673,16 @@ class BaseAPIClient:
 
 
 class OllamaClient(BaseAPIClient):
-    def __init__(self, base_url: str = "http://localhost:11434"):
+    def __init__(self, base_url: str = "http://localhost:11434",
+                 num_ctx: int = 0):
         self.base_url = base_url.rstrip('/')
         self.api_generate = f"{self.base_url}/api/generate"
         self.api_chat = f"{self.base_url}/api/chat"
+        # P2-3: 上下文窗口可配置（0=默认 4096；长视频/长转录场景调大，
+        # 避免转录被静默截断）。也可用环境变量 VAP_OLLAMA_NUM_CTX 配置。
+        if num_ctx <= 0:
+            num_ctx = int(os.environ.get("VAP_OLLAMA_NUM_CTX", "4096") or 4096)
+        self.num_ctx = num_ctx
         # 本机 Ollama 永远不应走外部系统代理：默认 localhost 会被代理拦截挂起。
         self._session = requests.Session()
         self._session.trust_env = False
@@ -693,7 +699,7 @@ class OllamaClient(BaseAPIClient):
             "messages": [{"role": "user", "content": prompt, "images": images_base64}],
             "stream": True,
             "temperature": temperature,
-            "options": {"num_ctx": 4096}
+            "options": {"num_ctx": self.num_ctx}
         }
 
         # Historical bug: this method yielded raw SSE JSON lines, which the

@@ -163,18 +163,29 @@ def create_visual_search_tool(app_context_getter):
             return "No frames available for visual search."
         
         try:
-            from sentence_transformers import SentenceTransformer, util
+            from sentence_transformers import util
             from PIL import Image
-            
-            # Load model (reuse if possible, here simplified)
-            model = SentenceTransformer('clip-ViT-B-32')
-            
+            from src.core.kb_indexer import get_embedder
+
+            # P2-1: 复用进程级共享 embedder（首次加载后毫秒级编码），
+            # 之前每次调用重新加载模型，搜索从秒级 → 毫秒级
+            model = get_embedder()
+            if model is None:
+                return "Visual search unavailable: CLIP embedder could not be loaded."
+
             # Compute query embedding
             query_emb = model.encode(query, convert_to_tensor=True)
-            
-            # Compute frame embeddings if not already done
-            frame_images = [Image.open(f.path) for f in app.frames]
-            frame_embs = model.encode(frame_images, convert_to_tensor=True)
+
+            # P2-1: 帧级 embedding 缓存（app 上挂缓存，按帧路径为 key）
+            cache = getattr(app, "_frame_emb_cache", None)
+            if cache is None or len(cache) != len(app.frames):
+                frame_images = [Image.open(f.path) for f in app.frames]
+                embs = model.encode(frame_images, convert_to_tensor=True,
+                                    show_progress_bar=False)
+                cache = {f.path: e for f, e in zip(app.frames, embs)}
+                app._frame_emb_cache = cache
+            import torch
+            frame_embs = torch.stack([cache[f.path] for f in app.frames])
             
             # Search top 3
             hits = util.semantic_search(query_emb, frame_embs, top_k=3)
@@ -320,3 +331,50 @@ def create_kb_search_tool(app_context_getter):
         except Exception as e:
             return f"KB search error: {e}"
     return search_kb
+
+def create_image_search_tool(app_context_getter):
+    """P2-6: 图→帧跨模态搜索（截图找时刻）。
+
+    用户上传一张图片（如微信截图/另一段视频截帧），在当前视频的关键帧中
+    找视觉上最相似的时刻。CLIP 图-图 embedding 直接比对。
+    """
+    def search_by_image(image_path: str = ""):
+        app = app_context_getter()
+        if not app or not hasattr(app, 'frames') or not app.frames:
+            return "No frames available for image search."
+        if not image_path:
+            return "No image provided. Args: {'image_path': '图片路径'}"
+        from pathlib import Path
+        img_p = Path(image_path)
+        if not img_p.exists():
+            return f"Image not found: {image_path}"
+
+        try:
+            from sentence_transformers import util
+            from PIL import Image
+            from src.core.kb_indexer import get_embedder
+
+            model = get_embedder()
+            if model is None:
+                return "Image search unavailable: CLIP embedder could not be loaded."
+
+            query_emb = model.encode([Image.open(str(img_p))], convert_to_tensor=True,
+                                     show_progress_bar=False)
+            cache = getattr(app, "_frame_emb_cache", None)
+            if cache is None or len(cache) != len(app.frames):
+                imgs = [Image.open(f.path) for f in app.frames]
+                embs = model.encode(imgs, convert_to_tensor=True, show_progress_bar=False)
+                cache = {f.path: e for f, e in zip(app.frames, embs)}
+                app._frame_emb_cache = cache
+            import torch
+            frame_embs = torch.stack([cache[f.path] for f in app.frames])
+            hits = util.semantic_search(query_emb, frame_embs, top_k=3)
+
+            results = []
+            for hit in hits[0]:
+                fr = app.frames[hit["corpus_id"]]
+                results.append(f"时间点 {fr.timestamp:.2f}s (相似度: {hit['score']:.2f})")
+            return "\n".join(results) if results else "未找到相似画面。"
+        except Exception as e:
+            return f"Image search error: {e}"
+    return search_by_image
