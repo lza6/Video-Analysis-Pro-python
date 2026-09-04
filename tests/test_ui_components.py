@@ -114,5 +114,9 @@ class TestPromptLoader:
 
 class TestVersionSingleSource:
     def test_launcher_uses_constants_version(self):
+        # 守护"版本单一来源"：launcher/窗口标题必须从 constants.APP_VERSION 取值。
+        # 断言改语义化：主版本号 ≥5（v5.x 起 tag 与常量对齐），不再硬编码具体版本
+        # ——否则每次发版都要改两处，守护测试自己变成双源。
         import src.utils.constants as c
-        assert c.APP_VERSION == "4.5.0"
+        major = int(c.APP_VERSION.split(".")[0])
+        assert major >= 5, f"APP_VERSION 应为 v5.x，实际 {c.APP_VERSION}"
