@@ -1,15 +1,51 @@
 {
   "version": 1,
   "skills": {
+    "api-and-interface-design": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/api-and-interface-design/SKILL.md",
+      "computedHash": "26f5a9e7abfd332d7a2e5887cf19bddd3393f47514c379b36bf227c1f15cdec4"
+    },
+    "code-review-and-quality": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/code-review-and-quality/SKILL.md",
+      "computedHash": "6231479cc74c7ed70a5618b81b3f94034d9806c0319a1a23d15f9b94a368c581"
+    },
+    "debugging-and-error-recovery": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/debugging-and-error-recovery/SKILL.md",
+      "computedHash": "1a119d27e8f1d27ed6317adf3115826336491346780dcb7d7a7a7f79fe3ffe10"
+    },
+    "documentation-and-adrs": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/documentation-and-adrs/SKILL.md",
+      "computedHash": "7464fd2950b99fb00bbf65cab27653e0a049eef00c98927713ffdfe232a9daa9"
+    },
     "machine-learning": {
       "source": "pluginagentmarketplace/custom-plugin-python",
       "sourceType": "autoskills-registry",
       "computedHash": "2381439c0d230fad40ead759b6820ecf58f189c4dfc0f446369fea93cfec40ff"
     },
+    "observability-and-instrumentation": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/observability-and-instrumentation/SKILL.md",
+      "computedHash": "6a22881e154faa94c7312ff1a083309a4ac75dd2b8c05eceef9fc3d7ba3827e5"
+    },
     "pandas-data-analysis": {
       "source": "pluginagentmarketplace/custom-plugin-python",
       "sourceType": "autoskills-registry",
       "computedHash": "612eb33d227296b4bdd0ca62785b2e31124a92adf5f40b730b0cf3713adc6f04"
+    },
+    "performance-optimization": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/performance-optimization/SKILL.md",
+      "computedHash": "f0a8e3bdb9b7d199434c2a5dd7cbb7d3cf69d802029cde1ef5daa07bffa27efc"
     },
     "python-executor": {
       "source": "inferen-sh/skills",
@@ -26,11 +62,29 @@
       "sourceType": "autoskills-registry",
       "computedHash": "07b87d62993c0b6159a91d18fc8723b7f4c13d5000c0984266c207493ce641ff"
     },
+    "security-and-hardening": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/security-and-hardening/SKILL.md",
+      "computedHash": "22d91d82a47263a9c8966afc475f0bf4cf437b90aadd5f46ffabd8de8a3fcb93"
+    },
+    "shipping-and-launch": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/shipping-and-launch/SKILL.md",
+      "computedHash": "47c62d418e9f3f395092864e6080b5c4b84fe3ef8abbbb6a3397ed655dda0ba8"
+    },
     "spec-driven-development": {
       "source": "addyosmani/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/spec-driven-development/SKILL.md",
       "computedHash": "aca026683acdae1cd8a58f335fb26e60fb5db11ae81461a6896b0bf561aacb75"
+    },
+    "test-driven-development": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/test-driven-development/SKILL.md",
+      "computedHash": "a8fef2b010af8402fd2979bdb2e5e39e5baa1ca14b5cdec366ee75df5e1dec68"
     }
   }
 }
