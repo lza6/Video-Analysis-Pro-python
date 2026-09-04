@@ -15,7 +15,7 @@
 | core-logic | VideoProcessor / AudioProcessor / VideoAnalyzer / ModelContextManager | kb-indexer, utils | 单机，可选 GPU |
 | agent-tools | 9 个 Agent 工具（截图/搜索/OCR/集锦/跳转/元数据/删除/KB搜索/视觉搜索） | core-logic | ReAct 循环，本地调用 |
 | kb-indexer | 跨视频向量知识库（ChromaDB 嵌入） | core-logic, history | 本地 sqlite+chromadb，单文件 |
-| headless-server | 可选 HTTP 分析服务（Docker 部署） | core-logic | 仅本地/受信网络，**需鉴权** |
+| headless-server | 可选 HTTP 分析服务（Docker 部署） | core-logic | 仅本地/受信网络，可选 Bearer Token 鉴权（`VAP_HEADLESS_TOKEN` 环境变量，空=禁用） |
 | website | Next.js 16 官网落地页（玻璃拟态 2.0） | — | 纯静态，无后端 API |
 | docs | README / UI-展示 / SPEC / TECHNICAL_DOC / PRD | 全部 | 文档与真实状态一致 |
 

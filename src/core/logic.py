@@ -679,6 +679,144 @@ class BaseAPIClient:
     def chat_stream(self, *args, **kwargs): raise NotImplementedError
 
 
+# ---- llm_gateway 接线（T3-GATEWAY） ----
+# 把孤岛模块 llm_gateway（ProtocolBackend/GatewayRouter）接成主客户端，统一满足
+# BaseAPIClient.chat_stream(model, prompt, image_paths, temperature, timeout) 契约，
+# 供 ChatWorker / VideoAnalyzer 无感替换 APIGatewayClient。主控 send_to_agent 只需
+# 一行：client = build_llm_client(self.config_manager)。
+
+def _read_gateway_config(config_manager) -> Tuple[str, str, str]:
+    """从 ConfigManager.LastUsed 读 api_url / api_key / model_name。
+
+    兼容 configparser 与 dict-like 配置对象，统一返回三元组（缺失项为空串）。
+    """
+    def _get(key: str) -> str:
+        try:
+            cfg = getattr(config_manager, "config", None)
+            if cfg is None:
+                return ""
+            # configparser.get(section, option, fallback=...) — 带 fallback 关键字
+            if hasattr(cfg, "has_section") and cfg.has_section("LastUsed"):
+                return str(cfg.get("LastUsed", key, fallback="") or "").strip()
+            # dict-like
+            if isinstance(cfg, dict):
+                section = cfg.get("LastUsed", {}) or {}
+                return str(section.get(key, "") or "").strip()
+            return ""
+        except Exception:
+            return ""
+    return _get("api_url"), _get("api_key"), _get("model_name")
+
+
+def _normalize_gateway_base_url(url: str) -> str:
+    """归一化 api_url 为 backend 期望的 base（去掉末尾 /chat/completions）。"""
+    url = (url or "").strip().rstrip("/")
+    if url.endswith("/chat/completions"):
+        url = url[: -len("/chat/completions")]
+    return url
+
+
+def _detect_gateway_protocol(api_url: str, model: str) -> str:
+    """按 base_url 域名/路径 + 模型名启发式选协议后端。
+
+    - anthropic / claude → anthropic（Anthropic Messages）
+    - gemini / googleapis → gemini（Gemini generateContent）
+    - /v1/responses → openai_responses（OpenAI Responses API）
+    - 默认 → openai_chat（兼容 deepseek/qwen/openai/iflow 等中转）
+    """
+    u = (api_url or "").lower()
+    m = (model or "").lower()
+    if "gemini" in u or "googleapis" in u or "gemini" in m:
+        return "gemini"
+    if "anthropic" in u or "claude" in m:
+        return "anthropic"
+    if "/v1/responses" in u:
+        return "openai_responses"
+    return "openai_chat"
+
+
+class _GatewayClientAdapter(BaseAPIClient):
+    """把 llm_gateway.GatewayRouter 适配到 BaseAPIClient 旧契约。
+
+    旧契约：chat_stream(model, prompt, image_paths=None, temperature=0.2, timeout=600)
+    backend 契约：chat_stream(messages, image_paths=None, temperature=0.2, system=None)
+
+    model/timeout 由 build_llm_client 在 backend __init__ 时注入（不可变优先，不在
+    调用时覆盖），str prompt 在此解析为 messages + system，转调 router。
+    """
+
+    def __init__(self, router, protocol: str, model: str, base_url: str, api_key: str):
+        self._router = router
+        self.protocol = protocol
+        self.model = model
+        self.base_url = base_url
+        self.api_key = api_key
+
+    def _coerce_prompt(self, prompt) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """str/list prompt → (messages, system)。
+
+        含 '--- System Context ---' 的 str 拆成 system 段 + user 段，system 走
+        backend 原生 system 参数（P2-2：不再塞进单条 user content）。
+        """
+        if isinstance(prompt, list):
+            return [dict(m) for m in prompt], None
+        if isinstance(prompt, str) and "--- System Context ---" in prompt:
+            parts = prompt.split("--- System Context ---", 1)
+            head = parts[0]
+            tail = parts[1] if len(parts) > 1 else ""
+            system_content = ""
+            user_content = head.strip()
+            if tail:
+                sub_parts = tail.split("--------------------", 1)
+                system_content = sub_parts[0].strip()
+                if len(sub_parts) > 1:
+                    user_content = (head + sub_parts[1]).strip() or user_content
+            if system_content:
+                return [{"role": "user", "content": user_content}], system_content
+            return [{"role": "user", "content": user_content}], None
+        return [{"role": "user", "content": str(prompt)}], None
+
+    def chat_stream(self, model: str, prompt, image_paths: Optional[List[str]] = None,
+                    temperature: float = 0.2, timeout: int = 600) -> Iterator[str]:
+        messages, system = self._coerce_prompt(prompt)
+        yield from self._router.chat_stream(messages, image_paths, temperature, system)
+
+
+def build_llm_client(config_manager) -> BaseAPIClient:
+    """工厂：按 ConfigManager 配置构建 llm_gateway 客户端。
+
+    路由规则见 _detect_gateway_protocol；单 provider 包进 GatewayRouter（无故障
+    转移队列，但保留多 provider 接口供后续扩展）。缺 api_key/api_url/model 时
+    显式 raise，不静默降级。
+
+    返回的 client 满足 BaseAPIClient.chat_stream(model, prompt, image_paths,
+    temperature, timeout) 契约，可直接替换 APIGatewayClient 注入 ChatWorker。
+    """
+    from src.core.llm_gateway import GatewayRouter
+
+    api_url, api_key, model = _read_gateway_config(config_manager)
+    if not api_key:
+        raise ValueError("API key required")
+    if not api_url:
+        raise ValueError("API URL required")
+    if not model:
+        raise ValueError("Model name required")
+
+    base_url = _normalize_gateway_base_url(api_url)
+    protocol = _detect_gateway_protocol(api_url, model)
+    provider = {
+        "id": "default",
+        "protocol": protocol,
+        "base_url": base_url,
+        "api_key": api_key,
+        "model": model,
+        "category": "custom",
+        "max_tokens": 8192,
+    }
+    router = GatewayRouter([provider], current="default")
+    return _GatewayClientAdapter(router, protocol, model, base_url, api_key)
+
+
 
 class OllamaClient(BaseAPIClient):
     def __init__(self, base_url: str = "http://localhost:11434",
@@ -864,22 +1002,34 @@ class APIGatewayClient(BaseAPIClient):
         yield from self._stream_openai_payload(payload, headers, timeout)
 
     def _prompt_to_messages(self, prompt: str) -> List[Dict[str, Any]]:
-        """单轮 str prompt → messages（含 --- System Context --- 解析）。"""
-        messages: List[Dict[str, Any]] = []
+        """单轮 str prompt → messages。
+
+        过渡兼容：旧链路 main_window.inject_agent_system_context 仍把视频上下文
+        拼成 "--- System Context ---\\n...\\n--------------------\\n" 字符串塞进 prompt。
+        这里把它解析成标准 OpenAI Chat Completions 的 system+user 双消息结构，
+        而非把分隔符原样塞进单条 user content（P2-2：消除字符串分隔符脆弱协议）。
+        未来 main_window 改用 build_system_prompt + 结构化 context 后可移除此分支。
+        """
         if "--- System Context ---" in prompt:
-            parts = prompt.split("--- System Context ---")
-            # Try to extract the block
-            if len(parts) > 1:
-                sub_parts = parts[1].split("--------------------")
+            parts = prompt.split("--- System Context ---", 1)
+            head = parts[0]
+            tail = parts[1] if len(parts) > 1 else ""
+            system_content = ""
+            user_content = head.strip()
+            if tail:
+                # 旧格式用 "--------------------" 作为上下文块结束分隔符
+                sub_parts = tail.split("--------------------", 1)
                 system_content = sub_parts[0].strip()
-                user_content = (parts[0] + (sub_parts[1] if len(sub_parts) > 1 else "")).strip()
-                messages.append({"role": "system", "content": f"系统上下文与视频信息：\n{system_content}"})
-                messages.append({"role": "user", "content": user_content})
-            else:
-                messages.append({"role": "user", "content": prompt})
-        else:
-            messages.append({"role": "user", "content": prompt})
-        return messages
+                if len(sub_parts) > 1:
+                    user_content = (head + sub_parts[1]).strip() or user_content
+            if system_content:
+                # 结构化双消息：system 承载上下文，user 承载真实问题
+                return [
+                    {"role": "system", "content": f"系统上下文与视频信息：\n{system_content}"},
+                    {"role": "user", "content": user_content},
+                ]
+            return [{"role": "user", "content": user_content}]
+        return [{"role": "user", "content": prompt}]
 
     def _stream_openai_payload(self, payload: Dict[str, Any], headers: Dict[str, str], timeout: int = 600) -> Iterator[str]:
         """发送 OpenAI 兼容流式请求并 yield 纯文本 delta（含 <think> 包装）。"""

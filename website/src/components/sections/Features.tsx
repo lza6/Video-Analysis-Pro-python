@@ -1,6 +1,8 @@
 "use client";
 
 import { motion, useReducedMotion, type Variants } from "motion/react";
+import { Container } from "@/components/ui/Container";
+import { SectionHeading } from "@/components/SectionHeading";
 
 type Feature = {
   icon: string;
@@ -60,33 +62,12 @@ export default function Features() {
 
   return (
     <section id="features" className="relative py-24 sm:py-32">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <motion.div
-          variants={container}
-          initial="hidden"
-          whileInView="show"
-          viewport={{ once: true, amount: 0.15 }}
-          className="text-center mb-14"
-        >
-          <motion.span
-            variants={item}
-            className="glass-chip rounded-full px-4 py-1.5 text-xs tracking-[0.2em] uppercase text-[oklch(0.8_0.12_205)]"
-          >
-            Features
-          </motion.span>
-          <motion.h2
-            variants={item}
-            className="mt-5 text-4xl sm:text-5xl font-black tracking-tight text-white"
-          >
-            一个工具，看透整段视频
-          </motion.h2>
-          <motion.p
-            variants={item}
-            className="mt-4 text-lg text-[oklch(0.72_0.02_260)] max-w-2xl mx-auto"
-          >
-            从数据提取到智能总结，再到媒体生成——三阶段流水线把 1 小时视频浓缩成 3 分钟精华。
-          </motion.p>
-        </motion.div>
+      <Container size="wide">
+        <SectionHeading
+          eyebrow="Features"
+          title="一个工具，看透整段视频"
+          subtitle="从数据提取到智能总结，再到媒体生成——三阶段流水线把 1 小时视频浓缩成 3 分钟精华。"
+        />
 
         <motion.div
           variants={container}
@@ -99,7 +80,7 @@ export default function Features() {
             <motion.article
               key={f.title}
               variants={item}
-              className={`glass glass-edge glass-hover glass-hover rounded-3xl p-7 flex flex-col gap-4 ${
+              className={`glass glass-edge glass-hover rounded-3xl p-7 flex flex-col gap-4 ${
                 f.span === "wide" ? "lg:col-span-2" : ""
               }`}
             >
@@ -107,13 +88,13 @@ export default function Features() {
                 {f.icon}
               </div>
               <h3 className="text-xl font-bold text-white">{f.title}</h3>
-              <p className="text-[oklch(0.72_0.02_260)] leading-relaxed">
+              <p className="text-mute leading-relaxed">
                 {f.desc}
               </p>
             </motion.article>
           ))}
         </motion.div>
-      </div>
+      </Container>
     </section>
   );
 }

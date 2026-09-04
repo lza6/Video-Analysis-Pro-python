@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# E2E 截图产物（Playwright 运行时生成，不入库）
+/E2E实测结果/

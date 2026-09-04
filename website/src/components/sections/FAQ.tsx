@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
+import { Container } from "@/components/ui/Container";
+import { SectionHeading } from "@/components/SectionHeading";
 
 const FAQS = [
   {
@@ -60,7 +62,7 @@ function Item({
             transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
             className="overflow-hidden"
           >
-            <p className="px-6 pb-5 text-[oklch(0.72_0.02_260)] leading-relaxed">
+            <p className="px-6 pb-5 text-mute leading-relaxed">
               {a}
             </p>
           </motion.div>
@@ -73,21 +75,14 @@ function Item({
 export default function FAQ() {
   return (
     <section id="faq" className="relative py-24 sm:py-32">
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="text-center mb-14">
-          <span className="glass-chip rounded-full px-4 py-1.5 text-xs tracking-[0.2em] uppercase text-[oklch(0.8_0.12_205)]">
-            FAQ
-          </span>
-          <h2 className="mt-5 text-4xl sm:text-5xl font-black tracking-tight text-white">
-            常见问题
-          </h2>
-        </div>
+      <Container size="narrow">
+        <SectionHeading eyebrow="FAQ" title="常见问题" />
         <div className="space-y-3">
           {FAQS.map((f) => (
             <Item key={f.q} {...f} />
           ))}
         </div>
-      </div>
+      </Container>
     </section>
   );
 }

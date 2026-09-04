@@ -47,6 +47,11 @@ from src.ui.model_manager_tab import ModelManagerTab
 from src.ui.api_intro_page import APIIntroPage
 from src.ui.help_dialog import HelpDialog
 from src.ui.carousel_widget import CarouselWidget
+from src.ui.decision_log_panel import DecisionLogPanel
+from src.ui.skills_manager_tab import SkillsManagerTab
+from src.ui.surveillance_tab import SurveillanceTab
+from src.core.decision_log import DecisionEntry, make_entry
+from src.core.eli5 import explain_tool_call
 
 class ImageLoaderSignals(QObject):
     loaded = pyqtSignal(object, object) # frame_obj, pixmap
@@ -176,6 +181,8 @@ class AnalysisWorker(QThread):
 class ChatWorker(QThread):
     chunk_received = pyqtSignal(str)
     finished = pyqtSignal()
+    # P1-4 黑匣子透明化：工具调用决策条目（Qt 跨线程信号 → DecisionLogPanel）
+    entry_append = pyqtSignal(object)
 
     def __init__(self, client, model, prompt, image_paths=None, tool_registry=None):
         super().__init__()
@@ -251,9 +258,31 @@ class ChatWorker(QThread):
                             else:
                                 args = {}
 
+                        t0 = time.monotonic()
                         result = self.tool_registry.execute_tool_call(tool_name, args)
-                        
-                        self.chunk_received.emit(f"✅ 工具返回: {str(result)[:100]}...\n")
+                        duration_ms = (time.monotonic() - t0) * 1000.0
+
+                        # P1-4 黑匣子透明化：
+                        # ① eli5 一句大白话（替代 100 字符截断的摘要行）
+                        # ② 决策日志条目 → DecisionLogPanel（entry_append 信号跨线程投递）
+                        eli5_text = explain_tool_call(tool_name, args, result)
+                        self.chunk_received.emit(f"✅ {eli5_text}\n")
+                        try:
+                            entry = make_entry(
+                                step_name="Agent 工具调用",
+                                action_type=tool_name,
+                                decision=eli5_text,
+                                reason=eli5_text,
+                                output_path=None,
+                                duration_ms=duration_ms,
+                                status="ok",
+                                risk="high" if tool_name == "delete_this_history" else "low",
+                            )
+                            self.entry_append.emit(entry)
+                        except Exception:
+                            logger_ = logging.getLogger(__name__)
+                            logger_.warning("[chat] 决策日志条目构造失败", exc_info=True)
+
                         self.chunk_received.emit("正在根据结果思考下一步")
                         
                         # B2: 对话历史追加（assistant 回答 + 观察结果），而非字符串拼接
@@ -943,6 +972,18 @@ class DesktopApp(QMainWindow):
         self.tab_api_help = APIIntroPage()
         self.tabs.addTab(self.tab_api_help, "💡 获取 API")
 
+        # Tab 7: 监控分析（v5.1 孤岛接线：rtsp_stream + surveillance_agent + llm_gateway）
+        self.tab_surveillance = SurveillanceTab(config_manager=self.config_manager)
+        self.tabs.addTab(self.tab_surveillance, "🎥 监控分析")
+
+        # Tab 8: Skills 管理（v5.1 用户 skills 沉淀机制）
+        self.tab_skills = SkillsManagerTab(history_manager=getattr(self, 'history_manager', None))
+        self.tabs.addTab(self.tab_skills, "🧩 Skills")
+
+        # Tab 9: Agent 决策日志（v5.1 黑匣子透明化）
+        self.tab_decision_log = DecisionLogPanel(parent=self)
+        self.tabs.addTab(self.tab_decision_log, "🧭 决策日志")
+
         middle_layout.addWidget(self.tabs, stretch=1)
         
         # --- AGENT PANEL (Right Sliding) ---
@@ -1208,6 +1249,8 @@ class DesktopApp(QMainWindow):
         self.chat_worker = ChatWorker(self.analyzer.client, model, full_prompt, image_paths=image_paths, tool_registry=getattr(self, 'tool_registry', None))
         self.chat_worker.chunk_received.connect(self.on_chat_chunk)
         self.chat_worker.finished.connect(self.on_chat_finished)
+        # P1-4：决策日志条目跨线程投递到面板
+        self.chat_worker.entry_append.connect(self.tab_decision_log.append_entry)
         self.chat_worker.start()
 
     def on_chat_chunk(self, chunk):

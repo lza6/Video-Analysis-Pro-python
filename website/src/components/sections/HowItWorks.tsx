@@ -1,6 +1,8 @@
 "use client";
 
 import { motion, useReducedMotion, type Variants } from "motion/react";
+import { Container } from "@/components/ui/Container";
+import { SectionHeading } from "@/components/SectionHeading";
 
 const STEPS = [
   {
@@ -46,18 +48,12 @@ export default function HowItWorks() {
 
   return (
     <section id="how" className="relative py-24 sm:py-32">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="text-center mb-16">
-          <span className="glass-chip rounded-full px-4 py-1.5 text-xs tracking-[0.2em] uppercase text-[oklch(0.8_0.12_205)]">
-            How it works
-          </span>
-          <h2 className="mt-5 text-4xl sm:text-5xl font-black tracking-tight text-white">
-            三阶段，从视频到洞察
-          </h2>
-          <p className="mt-4 text-lg text-[oklch(0.72_0.02_260)] max-w-2xl mx-auto">
-            逻辑清晰的工作流：提取 → 分析 → 生成。
-          </p>
-        </div>
+      <Container size="wide">
+        <SectionHeading
+          eyebrow="How it works"
+          title="三阶段，从视频到洞察"
+          subtitle="逻辑清晰的工作流：提取 → 分析 → 生成。"
+        />
 
         <div className="relative">
           {/* 中间连接线（桌面） */}
@@ -66,7 +62,7 @@ export default function HowItWorks() {
             initial="hidden"
             whileInView="show"
             viewport={{ once: true, amount: 0.4 }}
-            className="hidden lg:block absolute left-1/2 top-12 bottom-12 w-px -translate-x-1/2 origin-top bg-gradient-to-b from-[oklch(0.8_0.12_205)] via-[oklch(0.68_0.19_295)] to-[oklch(0.75_0.15_340)] opacity-40"
+            className="hidden lg:block absolute left-1/2 top-12 bottom-12 w-px -translate-x-1/2 origin-top bg-gradient-to-b from-accent via-accent-2 to-accent-3 opacity-40"
           />
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -86,19 +82,19 @@ export default function HowItWorks() {
                   <span className="text-5xl font-black text-gradient">
                     {s.num}
                   </span>
-                  <span className="text-xs tracking-[0.2em] uppercase text-[oklch(0.72_0.02_260)]">
+                  <span className="text-xs tracking-[0.2em] uppercase text-mute">
                     {s.subtitle}
                   </span>
                 </div>
                 <h3 className="text-2xl font-bold text-white mb-3">{s.title}</h3>
-                <p className="text-[oklch(0.72_0.02_260)] leading-relaxed mb-5">
+                <p className="text-mute leading-relaxed mb-5">
                   {s.desc}
                 </p>
                 <div className="flex flex-wrap gap-2">
                   {s.tags.map((t) => (
                     <span
                       key={t}
-                      className="glass-chip rounded-full px-3 py-1 text-xs text-[oklch(0.9_0.012_260)]"
+                      className="glass-chip rounded-full px-3 py-1 text-xs text-mist"
                     >
                       {t}
                     </span>
@@ -108,7 +104,7 @@ export default function HowItWorks() {
             ))}
           </div>
         </div>
-      </div>
+      </Container>
     </section>
   );
 }

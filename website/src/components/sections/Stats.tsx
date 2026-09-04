@@ -1,6 +1,7 @@
 "use client";
 
 import { motion, useReducedMotion, type Variants } from "motion/react";
+import { Container } from "@/components/ui/Container";
 
 const STATS = [
   { value: "3 阶段", label: "提取 → 分析 → 生成流水线" },
@@ -23,7 +24,7 @@ export default function Stats() {
 
   return (
     <section className="relative py-20">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <Container size="default">
         <motion.div
           variants={{ show: { transition: { staggerChildren: 0.1 } } }}
           initial="hidden"
@@ -36,13 +37,13 @@ export default function Stats() {
               <div className="text-4xl sm:text-5xl font-black text-gradient mb-2">
                 {s.value}
               </div>
-              <div className="text-sm text-[oklch(0.72_0.02_260)] leading-relaxed">
+              <div className="text-sm text-mute leading-relaxed">
                 {s.label}
               </div>
             </motion.div>
           ))}
         </motion.div>
-      </div>
+      </Container>
     </section>
   );
 }

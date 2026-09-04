@@ -35,6 +35,7 @@ node_modules/
 config/history.db
 config/chroma_db/
 config/app_config.ini
+config/skills_state.json
 
 # website/ 官网源码 —— 作为本仓库的一部分纳入版本控制，
 # 以便 clone 者能拿到完整 Next.js 源码（之前被排除导致 README 截图外无源码交付）。

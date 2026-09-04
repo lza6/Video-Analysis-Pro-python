@@ -40,7 +40,7 @@ export function SectionHeading({
       {eyebrow && (
         <motion.span
           variants={item}
-          className="glass-chip rounded-full px-4 py-1.5 text-xs tracking-[0.2em] uppercase text-[oklch(0.8_0.12_205)]"
+          className="glass-chip rounded-full px-4 py-1.5 text-xs tracking-[0.2em] uppercase text-accent"
         >
           {eyebrow}
         </motion.span>
@@ -54,7 +54,7 @@ export function SectionHeading({
       {subtitle && (
         <motion.p
           variants={item}
-          className="text-lg text-[oklch(0.72_0.02_260)] max-w-2xl leading-relaxed"
+          className="text-lg text-mute max-w-2xl leading-relaxed"
         >
           {subtitle}
         </motion.p>

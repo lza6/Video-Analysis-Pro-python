@@ -1,6 +1,9 @@
 "use client";
 
 import { motion, useReducedMotion, type Variants } from "motion/react";
+import { Container } from "@/components/ui/Container";
+
+const REPO_URL = "https://github.com/lza6/Video-Analysis-Pro-python";
 
 const PLATFORMS = [
   {
@@ -27,7 +30,7 @@ export default function Download() {
 
   return (
     <section id="download" className="relative py-24 sm:py-32">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+      <Container size="default">
         <motion.div
           variants={{ show: { transition: { staggerChildren: 0.1 } } }}
           initial="hidden"
@@ -38,7 +41,7 @@ export default function Download() {
           <div className="absolute -top-20 left-1/2 -translate-x-1/2 w-[30rem] h-[30rem] bg-[oklch(0.68_0.19_295/0.25)] rounded-full blur-[100px] pointer-events-none" />
           <motion.span
             variants={item}
-            className="glass-chip rounded-full px-4 py-1.5 text-xs tracking-[0.2em] uppercase text-[oklch(0.8_0.12_205)]"
+            className="glass-chip rounded-full px-4 py-1.5 text-xs tracking-[0.2em] uppercase text-accent"
           >
             Download
           </motion.span>
@@ -50,7 +53,7 @@ export default function Download() {
           </motion.h2>
           <motion.p
             variants={item}
-            className="mt-5 text-lg text-[oklch(0.72_0.02_260)] max-w-xl mx-auto leading-relaxed"
+            className="mt-5 text-lg text-mute max-w-xl mx-auto leading-relaxed"
           >
             开源、本地、可离线。选择你的平台，三步即可运行。
           </motion.p>
@@ -62,16 +65,16 @@ export default function Download() {
             {PLATFORMS.map((p) => (
               <a
                 key={p.os}
-                href="https://github.com/lza6/Video-Analysis-Pro-python"
+                href={p.os === "源码" ? `${REPO_URL}#readme` : REPO_URL}
                 target="_blank"
                 rel="noopener noreferrer"
                 className={`glass glass-edge glass-hover rounded-2xl p-6 flex flex-col items-center gap-3 ${
-                  p.primary ? "glass-strong border-[oklch(1_0_0/0.25)]" : ""
+                  p.primary ? "glass-strong border-white/25" : ""
                 }`}
               >
                 <span className="text-3xl">{p.icon}</span>
                 <span className="text-white font-bold">{p.os}</span>
-                <span className="text-xs text-[oklch(0.72_0.02_260)] font-mono">
+                <span className="text-xs text-mute font-mono">
                   {p.hint}
                 </span>
               </a>
@@ -80,13 +83,13 @@ export default function Download() {
 
           <motion.p
             variants={item}
-            className="mt-8 text-xs text-[oklch(0.72_0.02_260)]"
+            className="mt-8 text-xs text-mute"
           >
             需要 Python 3.10+ 与 FFmpeg · GPL v3 开源协议 · 由{" "}
             <span className="text-white">听风公司</span> 出品
           </motion.p>
         </motion.div>
-      </div>
+      </Container>
     </section>
   );
 }

@@ -7,6 +7,7 @@
 启动: python -m src.server.headless [--port 8000]
 """
 import argparse
+import hmac
 import json
 import logging
 import os
@@ -130,6 +131,36 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_unauthorized(self) -> None:
+        """401 响应 + Connection: close，不打印收到的 token。"""
+        body = json.dumps({"error": "unauthorized"}, ensure_ascii=False).encode()
+        self.close_connection = True
+        self.send_response(401)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _check_auth(self) -> bool:
+        """可选 Bearer Token 鉴权。
+
+        环境变量 VAP_HEADLESS_TOKEN 为空 → 禁用鉴权（向后兼容）。
+        非空 → 校验 Authorization: Bearer <token>，用 hmac.compare_digest
+        防时序攻击。401 不打印收到的 token，仅记 "unauthorized: token mismatch"。
+        """
+        expected = os.environ.get("VAP_HEADLESS_TOKEN", "")
+        if not expected:
+            return True  # 未配置 token → 鉴权关闭
+        auth = self.headers.get("Authorization", "")
+        got = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
+        # 防时序攻击：常量时间比较，不短路
+        if not hmac.compare_digest(got, expected):
+            logger.warning("unauthorized: token mismatch")
+            self._send_unauthorized()
+            return False
+        return True
+
     def do_GET(self):
         if self.path == "/healthz":
             import shutil as _sh
@@ -145,6 +176,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path != "/analyze":
             return self._json(404, {"error": "not found"})
+
+        # 可选 Bearer Token 鉴权（VAP_HEADLESS_TOKEN 非空时启用）。
+        # /healthz 不鉴权；仅 /analyze 校验。
+        if not self._check_auth():
+            return
 
         # T5 DoS 加固: 先校验 Content-Length 再读 body。
         # 历史风险: 恶意客户端声明 10GB 并读入内存 → OOM。
@@ -218,6 +254,9 @@ def main():
     logging.getLogger("VideoAnalyzerCore").setLevel(logging.INFO)
 
     logger.info(f"能力矩阵: {json.dumps(_capability_matrix())}")
+    _token = os.environ.get("VAP_HEADLESS_TOKEN", "")
+    if _token:
+        logger.info(f"headless auth: enabled (token length={len(_token)})")
     server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     logger.info(f"Headless 服务已启动: http://0.0.0.0:{args.port}")
     try:

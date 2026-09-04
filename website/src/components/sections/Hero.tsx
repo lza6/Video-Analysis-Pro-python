@@ -2,6 +2,7 @@
 
 import { motion, useReducedMotion, type Variants } from "motion/react";
 import dynamic from "next/dynamic";
+import { Container } from "@/components/ui/Container";
 
 const HeroVisual = dynamic(() => import("../HeroVisual"), {
   ssr: false,
@@ -45,7 +46,7 @@ export default function Hero() {
         <div className="aurora w-[30rem] h-[30rem] left-1/3 bottom-[-10rem] bg-[oklch(0.75_0.15_340/0.14)]" />
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full">
+      <Container size="wide" className="w-full">
         <div className="grid lg:grid-cols-2 gap-10 items-center">
           <motion.div
             variants={container}
@@ -55,9 +56,9 @@ export default function Hero() {
           >
             <motion.span
               variants={item}
-              className="glass-chip glass-edge rounded-full px-4 py-2 self-start text-xs tracking-[0.2em] uppercase text-[oklch(0.8_0.12_205)] flex items-center gap-2"
+              className="glass-chip glass-edge rounded-full px-4 py-2 self-start text-xs tracking-[0.2em] uppercase text-accent flex items-center gap-2"
             >
-              <span className="w-2 h-2 rounded-full bg-[oklch(0.8_0.12_205)] animate-[pulse-glow_2s_ease-in-out_infinite]" />
+              <span className="w-2 h-2 rounded-full bg-accent animate-[pulse-glow_2s_ease-in-out_infinite]" />
               本地运行 · 隐私至上 · 开源
             </motion.span>
 
@@ -72,7 +73,7 @@ export default function Hero() {
 
             <motion.p
               variants={item}
-              className="text-lg sm:text-xl text-[oklch(0.72_0.02_260)] leading-relaxed max-w-xl"
+              className="text-lg sm:text-xl text-mute leading-relaxed max-w-xl"
             >
               基于 Python 的本地化视频分析工具。融合计算机视觉、语音识别与大语言模型，把 1 小时的视频浓缩成 3 分钟的精华报告——隐私不出本机，逻辑全透明。
             </motion.p>
@@ -83,7 +84,7 @@ export default function Hero() {
             >
               <a
                 href="#download"
-                className="group relative inline-flex items-center justify-center rounded-full bg-gradient-to-r from-[oklch(0.68_0.19_295)] to-[oklch(0.8_0.12_205)] px-7 py-3.5 text-white font-medium transition-transform hover:-translate-y-0.5 active:scale-[0.98]"
+                className="group relative inline-flex items-center justify-center rounded-full bg-gradient-to-r from-accent-2 to-accent px-7 py-3.5 text-white font-medium transition-transform hover:-translate-y-0.5 active:scale-[0.98]"
               >
                 <span className="relative z-10">立即下载</span>
               </a>
@@ -97,7 +98,7 @@ export default function Hero() {
 
             <motion.div
               variants={item}
-              className="flex flex-wrap items-center gap-x-5 gap-y-2 mt-4 text-xs text-[oklch(0.72_0.02_260)]"
+              className="flex flex-wrap items-center gap-x-5 gap-y-2 mt-4 text-xs text-mute"
             >
               <span>Python 3.10+</span>
               <span className="w-1 h-1 rounded-full bg-current opacity-50" />
@@ -116,7 +117,7 @@ export default function Hero() {
             <HeroVisual />
           </motion.div>
         </div>
-      </div>
+      </Container>
     </section>
   );
 }
