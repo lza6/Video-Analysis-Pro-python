@@ -304,7 +304,7 @@ class ChatWorker(QThread):
                             err_entry = make_entry(
                                 step_name="Agent 工具调用",
                                 action_type=tool_name,
-                                decision=f"工具执行出错",
+                                decision="工具执行出错",
                                 reason=f"{tool_name} 抛出异常：{e}",
                                 status="error",
                                 risk="high",

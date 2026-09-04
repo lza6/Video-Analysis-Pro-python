@@ -138,7 +138,12 @@ def run_analysis(video_bytes: bytes, filename: str, model: str = "qwen2.5:3b") -
             "report": report,
         }
     finally:
+        _ANALYZE_SEMAPHORE.release()
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+class _ServerBusy(Exception):
+    """服务繁忙（信号量未获取），do_POST 映射为 503。"""
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -248,9 +253,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             result = run_analysis(data, filename)
             self._json(200, result)
-        except Exception as e:
+        except _ServerBusy:
+            # 503：调用方应退避重试，不泄露内部状态
+            self.close_connection = True
+            self._json(503, {"error": "server busy, retry later"})
+        except Exception:
+            # P1：500 不回传 str(e)（含 workdir/模型路径），只回 job_id + 通用消息
             logger.exception("analysis failed")
-            self._json(500, {"error": str(e)})
+            self._json(500, {"error": "analysis failed", "detail": "see server log"})
 
     def _parse_multipart(self, body: bytes, boundary: bytes):
         """multipart 解析（单文件字段）。

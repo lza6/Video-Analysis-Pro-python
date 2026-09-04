@@ -10,6 +10,9 @@ services:
     environment:
       - VAP_PORT=8000
       - VAP_MAX_UPLOAD_MB=512
+      # 生产强制鉴权：不配 VAP_HEADLESS_TOKEN 时 /analyze 公网裸奔（audit-blinds P1-2）。
+      # 部署前必须在 .env 设一个强随机 token，调用方带 Authorization: Bearer <token>。
+      - VAP_HEADLESS_TOKEN=${VAP_HEADLESS_TOKEN:-}
     volumes:
       - vap-data:/data
     restart: unless-stopped

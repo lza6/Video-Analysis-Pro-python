@@ -15,6 +15,7 @@ RUN python -m pip install --no-cache-dir pip --upgrade
 
 COPY requirements.txt requirements-ocr.txt ./
 # cuBLAS/cuDNN for faster-whisper (官方清单)
+# 同步补 seaborn/matplotlib/pandas：CPU Dockerfile 同样问题，否则 Docker 形态 Phase3 全禁用
 RUN pip install --no-cache-dir \
         torch --index-url https://download.pytorch.org/whl/cu121 \
     && pip install --no-cache-dir \
@@ -23,6 +24,7 @@ RUN pip install --no-cache-dir \
         moviepy imageio-ffmpeg faster-whisper sentence-transformers \
         chromadb markdown2 requests psutil pymediainfo pydub pillow \
         nvidia-ml-py duckduckgo-search \
+        matplotlib seaborn "pandas<3" \
     || true
 
 COPY src ./src
