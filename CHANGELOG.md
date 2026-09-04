@@ -1,5 +1,39 @@
 # Changelog — Video Analysis Pro
 
+## [5.5.0] — 2026-09-04 · 黑匣子透明化 Critic 闭环 + 小白易用弹窗 + 资源/内存安全
+
+### 🧭 黑匣子透明化（Critic 轮1 全 MAJOR/MINOR 修复）
+- **决策日志异常分支补齐**（MAJOR-1）：ChatWorker 工具抛异常时也写 `DecisionEntry(status="error")`，黑匣子不再漏掉最有记录价值的失败调用。
+- **决策日志 args 字段**（MAJOR-2）：`DecisionEntry` 新增 `args_json`，ChatWorker 工具调用点传入真实参数 JSON；`DecisionLogPanel` 详情区"参数"行从拼凑伪内容改为展示真实工具入参。
+- **headless filename 路径消毒**（MAJOR-3）：`run_analysis` 对客户端 multipart filename 取 `Path(filename).name`，防 `..\\x.mp4` / `C:\\evil.mp4` 逃逸 workdir 写任意路径（commit 213cf57 声称已修但实际未落地）。
+- **delete_this_history 文案诚实化**（MAJOR-4）：eli5 文案改"⚠️ 危险操作，后端会拦截等待你确认"，与后端实际行为（返回需确认提示不真删）一致。
+- **bearer scheme 大小写不敏感**（MINOR-5）：`_check_auth` 按 RFC 7235 scheme 不区分大小写；非 ASCII token `compare_digest` 抛 TypeError 兜底 401 不 500。
+- **skills 导入反馈**（MINOR-7）：`SkillsManagerTab` 新增顶部状态行，导入失败（无 SKILL.md / 目标已存在 / 拷贝失败）UI 可见红字提示，不再只 logger.warning。
+- **_prompt_to_messages 语义倒置**（MINOR-5 logic）：注释说明真实链路 prompt 形态（六模块 system prompt + 视频上下文分隔符 + user question），P2-2 双路径（APIGatewayClient + _GatewayClientAdapter）都把分隔符解析成 system+user 双消息，未来 main_window 改用 build_system_prompt 后可移除过渡分支。
+
+### 🪟 小白易用 P1（audit-blinds "假按钮"）
+- `main_window.py`：无视频/无关键帧/无模型时点按钮静默 return → `QMessageBox` 中文弹窗 + 明确下一步动作（Phase 1 先提取 / 检查抽帧密度 / 加载模型流程）。
+- `agent_tools.py create_highlight_cut`：VideoFileClip try-finally 关闭（异常路径不泄漏）；输出文件名加时间戳 `highlights_YYYYMMDD_HHMMSS.mp4` 防连续调用覆盖；描述匹配从单字符命中改 jaccard 分词交集（旧实现中文'的/了/是'几乎必中，任意描述趋同，集锦等于取前3帧）。
+
+### 🛡️ 资源/内存安全（audit-prod）
+- `logic.py` kb 帧编码分批 `BATCH=64` + 即时 `Image.close()`，防 10000 帧全量载入内存峰值。
+- `history_manager.py clear_all_history` 兜底清理 ChromaDB 孤儿向量（sessions 无行但 kb_frames 残留的条目）。
+- `.env.example` 改为只列代码真正读取的变量（grep 实测），移除历史误导项 `VAP_LLM_PROVIDER/BASE_URL/MODEL/API_KEY/MONITOR_DIR`（代码从未消费，监控真实凭据来源是 GUI LastUsed 配置）。
+- `Dockerfile` / `Dockerfile.cuda` / `docker-compose.yml` 同步补 seaborn/matplotlib/pandas 与 VAP_HEADLESS_TOKEN 生产鉴权提示（Docker 形态不再天然复活 Phase3 全禁用 + 公网裸奔）。
+
+### 🔬 headless 服务加固
+- 并发信号量 `_ANALYZE_SEMAPHORE`（`VAP_ANALYZE_CONCURRENCY` 默认 1）串行化 run_analysis，防并发重载 Whisper/Ollama 致 VRAM OOM；503 `_ServerBusy` 映射。
+- 500 响应不回传 `str(e)`（含 workdir/模型路径），只回通用 message + job_id。
+- 可选 Bearer Token 鉴权（`VAP_HEADLESS_TOKEN` 空=禁用；`/healthz` 永不鉴权供 Docker healthcheck）。
+
+### ✅ 验证（全部真实执行）
+- `pytest tests/`：140 passed（标准 + smoke + headless + gateway + decision_log + eli5 + skills + surveillance_tab + concurrency）
+- `ruff check src/ launcher.py --select F`：All checks passed
+- `mypy` 新模块 8 文件：Success no issues
+- 集成 E2E：ChatWorker→entry_append→DecisionLogPanel 跨线程信号链路真实工作；headless token 鉴权真实 401/200；gateway 工厂路由 4 协议；filename 消毒 `..\\..\\evil.mp4`→`evil.mp4`
+
+---
+
 ## [5.4.0] — 2026-09-04 · 官网前端诊断闭环 + spec-kit 审计工作流
 
 ### 🌐 官网前端（website/）— 诊断报告全部 P0/P1 改进落地
