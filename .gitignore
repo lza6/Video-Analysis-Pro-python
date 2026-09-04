@@ -48,3 +48,11 @@ website/out/
 website/.env*.local
 .env
 E2E实测结果/
+
+# 临时探测/诊断脚本（surveillance E2E 连通性分步诊断，跑完即删）
+_e2e_conn.py
+_e2e_diag.py
+_probe_clip.mp4
+_e2e_url.py
+_host_probe.py
+_host_url.txt
