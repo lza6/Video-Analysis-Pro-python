@@ -302,7 +302,20 @@ class HistoryManager:
         history = self.get_history()
         for session in history:
             self.delete_session(session['id'])
-        logging.info("All history cleared from SQLite.")
+        # 兜底清理孤儿向量：sessions 已无行但 kb_frames 残留的条目
+        # （delete_session 内部按 session_id 删，但孤儿没有对应行故跳过——audit-blinds P2-7）
+        if self.chroma_client:
+            try:
+                kb = self.chroma_client.get_collection(name=self.KB_COLLECTION_NAME)
+                kb.delete()  # 删整个 collection 重建，最彻底
+            except Exception:
+                pass
+            try:
+                prefs = self.chroma_client.get_collection(name=self.PREFS_COLLECTION_NAME)
+                prefs.delete()
+            except Exception:
+                pass
+        logging.info("All history cleared from SQLite + ChromaDB (kb_frames + user_preferences).")
 
     def cleanup_old_sessions(self, retention_days=7):
         cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat()

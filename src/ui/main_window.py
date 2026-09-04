@@ -605,6 +605,17 @@ class DesktopApp(QMainWindow):
             if worker is not None:
                 if hasattr(worker, 'stop'):
                     worker.stop()
+                # P1（audit-prod/audit-blinds）：ChatWorker stop() 只置标志，
+                # 流式 requests 读挂起时 wait(3000) 不够 → 关窗仍可触发
+                # "QThread: Destroyed while running"。补救：强制断开 analyzer.client
+                # 的 requests.Session，让网络读抛异常退出循环。
+                if attr == 'chat_worker' and getattr(self, 'analyzer', None):
+                    try:
+                        sess = getattr(self.analyzer.client, '_session', None)
+                        if sess is not None:
+                            sess.close()
+                    except Exception:
+                        pass
                 if worker.isRunning():
                     worker.wait(3000)
 
@@ -2082,7 +2093,21 @@ class DesktopApp(QMainWindow):
         self.tabs.setCurrentWidget(self.tab_gallery)
 
     def generate_summary_media(self):
-        if not self.video_path or not self.output_dir: return
+        if not self.video_path or not self.output_dir:
+            # P1（audit-blinds）：无视频/无 output_dir 时静默 return → 假按钮。
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self, "尚未就绪",
+                "请先完成 Phase 1（拖入视频并点击「开始提取数据」），\n"
+                "生成摘要媒体需要先提取关键帧。")
+            return
+        if not getattr(self, 'frames', None):
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, "无关键帧",
+                "Phase 1 未提取到任何关键帧，无法生成摘要媒体。\n"
+                "请检查视频是否有效、抽帧密度是否过低。")
+            return
         logging.info(">>> 启动 Phase 3: 生成摘要媒体 (Clips/GIF)...")
         self.status_console.add_task("Phase 3: 生成摘要媒体")
         self.agent_panel.update_thoughts("正在合成摘要视频与 GIF...")
@@ -2348,7 +2373,15 @@ class DesktopApp(QMainWindow):
 
     def start_ai_analysis(self):
         if not self.analyzer:
-            logging.info("错误: 模型未加载。")
+            # P1（audit-blinds）：无模型时点了静默 return → 小白以为按钮坏了。
+            # 改为中文弹窗 + 明确下一步动作。
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, "模型未加载",
+                "请先在左侧选择并加载一个模型（Ollama 本地模型或 API 模型），\n"
+                "再点击「生成 AI 总结」。\n\n"
+                "本地模型：选择 Ollama 后点击「🔄 刷新」拉取列表；\n"
+                "API 模型：填写 URL + Key 后点击「检查 API」拉取列表，再「加载」。")
             return
             
         self.tabs.setCurrentWidget(self.tab_report)

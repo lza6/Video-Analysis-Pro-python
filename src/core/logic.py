@@ -342,10 +342,27 @@ class VideoProcessor:
                 logger.warning("语义去重跳过: embedder 加载失败")
                 return frames
             
-            # Encode images
-            image_paths = [str(f.path) for f in frames]
-            images = [Image.open(p) for p in image_paths]
-            embeddings = model.encode(images, convert_to_tensor=True)
+            # Encode images：分批 + 即时关闭，防 10000 帧全量载入内存峰值（audit-prod P1）
+            from PIL import Image
+            BATCH = 64
+            embeddings_list = []
+            for start in range(0, len(frames), BATCH):
+                chunk = frames[start:start + BATCH]
+                images = []
+                for f in chunk:
+                    try:
+                        images.append(Image.open(str(f.path)).convert("RGB"))
+                    except Exception:
+                        images.append(Image.new("RGB", (224, 224)))
+                embeddings_list.append(
+                    model.encode(images, convert_to_tensor=True, show_progress_bar=False))
+                for img in images:
+                    try:
+                        img.close()
+                    except Exception:
+                        pass
+            import torch as _torch
+            embeddings = _torch.cat(embeddings_list) if embeddings_list else model.encode([], convert_to_tensor=True)
             
             keep_indices = [0] # Keep the first frame
             for i in range(1, len(frames)):

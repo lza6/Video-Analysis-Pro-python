@@ -224,28 +224,59 @@ def create_ocr_tool(app_context_getter):
     return ocr_specified_frame
 def create_highlight_cut_tool(app_context_getter):
     def highlight_cut(description: str):
-        """根据描述自动剪辑集锦视频。"""
+        """根据描述自动剪辑集锦视频。
+
+        v5.4 修复（audit-prod P1）：
+        - VideoFileClip 用 with/try-finally 保证关闭（异常路径不泄漏）
+        - 输出文件名加时间戳，防连续调用/并发覆盖 highlights.mp4
+        - 描述匹配改用分词（中英文）+ jaccard，替代单字符命中（旧实现 '的/了/是' 必中）
+        """
         app = app_context_getter()
         if not app: return "App context missing."
-        
-        try:
-            from moviepy import VideoFileClip, concatenate_videoclips
-            output_path = app.output_dir / "highlights.mp4"
 
+        import time as _t
+        from moviepy import VideoFileClip, concatenate_videoclips
+        # 时间戳后缀防覆盖：连续两次 highlight_cut 不再写同一文件
+        ts_suffix = _t.strftime("%Y%m%d_%H%M%S")
+        output_path = app.output_dir / f"highlights_{ts_suffix}.mp4"
+
+        # 旧实现：单字符命中 sum(1 for ch in description if ch in content)
+        # 中文 '的/了/是' 几乎必中 → 任意描述结果趋同。改用 jaccard 分词交集。
+        def _tokenize(text: str) -> set:
+            # 中文按字、英文按词；空集合兜底
+            if not text:
+                return set()
+            toks = set()
+            # 英文单词
+            for w in (text.lower().split()):
+                if w.strip():
+                    toks.add(w.strip(".,!?;:\"'()[]（）。，！？；："))
+            # 中文单字（2 字以上连续中文段按字切）
+            import re as _re
+            for seg in _re.findall(r"[一-鿿]+", text):
+                for ch in seg:
+                    toks.add(ch)
+            return toks
+
+        desc_tokens = _tokenize(description or "")
+        video = None
+        try:
             video = VideoFileClip(str(app.video_path))
 
-            # 诚实实现：按 description 做轻量语义匹配（非"AI 智能挑选"的过誉宣传）。
-            # 对每帧 vision_content 与 description 做关键词/词频粗匹配，取 top-3 命中片段。
-            # 之前硬编码前 3 帧 [:3] 忽略 description，被 PRD 标记为 P1-3 待修复。
             segments = []
             if hasattr(app, 'frames') and app.frames:
                 scored = []
                 for f in app.frames:
                     if not f.vision_content:
                         continue
-                    # 极简词频打分：description 出现的字符在 vision_content 中的命中数
-                    content = f.vision_content or ""
-                    score = sum(1 for ch in description if ch in content) if description else 0
+                    content_tokens = _tokenize(f.vision_content or "")
+                    if not desc_tokens or not content_tokens:
+                        score = 0.0
+                    else:
+                        # jaccard：交集/并集，0-1
+                        inter = len(desc_tokens & content_tokens)
+                        union = len(desc_tokens | content_tokens)
+                        score = inter / union if union else 0.0
                     scored.append((score, f))
                 scored.sort(key=lambda x: x[0], reverse=True)
                 for _, f in scored[:3]:
@@ -255,17 +286,22 @@ def create_highlight_cut_tool(app_context_getter):
                         segments.append(video.subclipped(start, end))
 
             if not segments:
-                video.close()
                 return "未找到足够的相关片段进行剪辑。"
 
             final_clip = concatenate_videoclips(segments)
-            final_clip.write_videofile(str(output_path), codec="libx264")
+            final_clip.write_videofile(str(output_path), codec="libx264", logger=None)
             final_clip.close()
-            video.close()
 
             return f"集锦视频生成成功：{output_path.name}"
         except Exception as e:
             return f"剪辑出错: {e}"
+        finally:
+            # 铁律：异常路径也要释放 VideoFileClip（audit-prod P1）
+            if video is not None:
+                try:
+                    video.close()
+                except Exception:
+                    pass
     return highlight_cut
 
 def create_visual_grounding_tool(app_context_getter):
