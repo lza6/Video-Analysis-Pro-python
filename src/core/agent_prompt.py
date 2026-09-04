@@ -197,16 +197,59 @@ def match_skills(text: str, skills) -> Optional[str]:
       - 用户文本含任一 trigger，或 trigger 含在用户文本中
     仅 enabled 的 skill 参与匹配。无命中或 skills 为空返回 None（不占上下文）。
     纯函数，无副作用，可单测。
+
+    M4 增补（监控分析 skills 自动路由）：
+      当文本含监控场景关键词时，强制路由到对应 surveillance skill，
+      即使该 skill 的 triggers 未显式列全（用户用"找包""找人"等口语
+      描述时，仍能命中稀疏走廊算法而非默认视频摘要）。
+      - 稀疏走廊（surveillance-sparse-corridor）：走廊/楼梯/电梯厅/监控+
+        找包/找人/找物 + 长时间无人的场景
+      - 密集场景（surveillance-crowded-scene）：商场/路口/车站/人多/密集/
+        人流/拥挤
+      显式 triggers 命中优先；无显式命中时再走语义关键词路由。
     """
     if not text or not skills:
         return None
     lower = text.lower()
     hits: list[str] = []
+
+    def _append_hit(sk) -> None:
+        # 编号由当前已命中数 +1 推导，保证编号连续不跳号
+        hits.append(f"{len(hits) + 1}. {sk.name}: {sk.description}")
+
+    # 1) 显式 triggers 双向子串匹配（原逻辑，向后兼容）
     for sk in skills:
         if not sk.enabled or not sk.triggers:
             continue
         if any(t.lower() in lower or lower in t.lower() for t in sk.triggers if t):
-            hits.append(f"{len(hits) + 1}. {sk.name}: {sk.description}")
+            _append_hit(sk)
+
+    # 2) M4 监控语义路由：无显式命中时按场景关键词补一次
+    if not hits:
+        sparse_keys = (
+            "走廊", "楼梯", "电梯厅", "楼道", "门厅",
+            "监控", "surveillance", "cctv", "摄像头",
+            "找包", "找人", "找物", "丢失", "被盗",
+            "空房间", "无人", "夜里", "过夜",
+        )
+        crowded_keys = (
+            "商场", "路口", "车站", "地铁", "机场",
+            "人流", "人多", "密集", "拥挤", "density", "crowd",
+        )
+        is_sparse = any(k in lower for k in sparse_keys)
+        is_crowded = any(k in lower for k in crowded_keys)
+        # 同时命中两类时，密集优先（商场里也有走廊，但密集场景算法更合适）
+        target_name = None
+        if is_crowded:
+            target_name = "surveillance-crowded-scene"
+        elif is_sparse:
+            target_name = "surveillance-sparse-corridor"
+        if target_name:
+            for sk in skills:
+                if sk.enabled and sk.name == target_name:
+                    _append_hit(sk)
+                    break
+
     if not hits:
         return None
     return "\n".join(hits)

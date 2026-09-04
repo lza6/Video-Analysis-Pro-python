@@ -1,5 +1,51 @@
 # Changelog — Video Analysis Pro
 
+## [5.6.0] — 2026-09-05 · 监控批量分析 Agent 化（NVIDIA Nemotron + 新算法省 99% 调用 + 二次验证）
+
+### 🎯 监控批量分析全链路（核心新功能）
+- **新算法引擎 motion_detector**（`src/core/motion_detector.py`）：1fps 抽帧 + scenedetect 场景切分 + 帧差分 + 昼夜自适应阈值（day 15 / night 6），只对画面有变化的时段送 AI，跳过空走廊。实测 63 个 17.7min 视频只送 15 片 AI（旧方案要 2268 片），**省 99.3% API 调用**。
+- **批量引擎 batch_runner**（`src/core/batch_runner.py`）：视频级并发 4（CPU 多核并行 motion_detector）+ 单 key 并发 2 + 断点续跑（resume）+ 内存回收（每视频 gc.collect + 清分片临时目录）+ 命中自动裁剪（ffmpeg ±clip_padding 无损 -c copy）。
+- **二次验证防误判**：首次判断 match=true 且 confidence≥0.7 → 自动再送 NVIDIA 用严格 prompt（has_person/has_target_item/description）确认，只有 has_target_item=true 才最终算命中。实测消除 `_375`/`_388` 旧误判。
+- **总命中报告**：跑完自动生成 `HITS_REPORT.md`（视频名/命中时间码 HH:MM:SS/片段起止/置信度/片段路径/AI 描述），含二次验证标注。
+
+### 🔌 NVIDIA 多 provider 路由（`src/core/provider_router.py`）
+- **多 key 轮换**：11 个 NVIDIA nvapi key 全活（实测），优先级 + LRU 轮换，40 req/min 每 key 滑动窗口令牌桶。
+- **503 退避优化**：撞 503/5xx 不立即切 key，先短退避 1.5s 重试同 key 2 次（给 worker 池空槽窗口），仍失败再切下一 key，无限重试语义保留。解决 11 key 雪崩式互相挤占空转。
+- **per-key 并发 Semaphore(2)**：11 key × 2 = 22 并发上限，拉满又不互挤。
+- **致命错误分类**：仅 401/403/404/422 标 key 失效并 raise（无权访问），429/5xx/网络错误切 key 重试。
+- **per-model 分片配置不写死**（`nvidia_models.py`）：NvidiaModel 加 max_segment_sec/max_video_mb/max_frames/target_height/target_fps 字段 + `get_video_config()`，不同模型不同限制。
+
+### 🤖 Agent 对话框主界面（豆包风格）
+- **agent_dialog.py**：消息气泡 + 上传视频/照片 + 工具箱侧栏（传统功能/监控分析/批量监控/模型管理）+ agent 回复区（思考链+工具调用+结果）。
+- **agent_orchestrator.py**：意图分类 7 类 + skill 匹配 + plan 构建 + run_plan 驱动 + on_task_step_done 每轮介入决策（继续/停/换策略）+ configure_provider_dialog 对话式配 key（测活性）+ download_model_dialog 帮用户下模型（SHA256 校验）。
+- **main_window 集成**：主界面改为 AgentDialog，旧 AgentPanel 保留兼容，batch_tab 作为工具箱一项接入。
+
+### 🗄️ 数据库存储层（`src/core/run_store.py`）
+- **三表 schema**：runs（视频级）/ segments（分片级，含 first_token_ms）/ clips（命中片段），WAL 并发读写 + 外键级联删除 + status 枚举校验。
+- **旧库自动迁移**：`_ensure_column` 探测缺失列 ALTER TABLE 补齐（first_token_ms 向后兼容）。
+- **一键清理**：`clear_all(purge_files=True)` 清 DB + 删磁盘 clip 文件。
+
+### 📊 UI 增强（`src/ui/batch_tab.py`）
+- **画面变化像素选项带案例**（贴心设计）：5 档下拉每项带实际监控场景案例（"10% - 有人经过门廊"），用户一看就懂选哪档。
+- **实时预计完成时间**：基于已跑片平均耗时 × 剩余 / 并发数。
+- **任务树两级**：QTreeWidget 顶级=视频，子级=分片懒加载（idx/时间戳/match/confidence/attempts/first_token_ms）。
+- **单视频汇总**：总耗时 / API 调用次数 / 平均首字耗时 / 命中数 / 覆盖率%。
+
+### 🧠 skills 蒸馏 + agent 自动匹配
+- **surveillance-sparse-corridor skill**（`config/skills/`）：稀疏走廊场景（长时间无人），1fps+场景检测+帧差分+昼夜自适应，只送变化时段给 AI。
+- **surveillance-crowded-scene skill**（占位）：人多密集场景用 YOLO 追踪，后续实现。
+- **agent_prompt.match_skills 接入**：用户说"分析监控找包" → 自动匹配 sparse-corridor；"商场人流分析" → crowded-scene；密集优先；显式 triggers 优先。
+
+### 🔗 Kilo + 知识库 RAG
+- **kilo_provider.py**：Kilo OpenAI 兼容多 key 轮换（401/403/429 切 key），用于 agent/编码通道（Kilo 不支持视频）。
+- **kb_rag.py**：复用现有 history_manager.search_kb + kb_indexer.get_embedder（同一 kb_frames collection），Kilo 做 LLM 问答，Kilo 不可用时退化为纯检索。
+
+### ✅ 验证（真实证据）
+- **全量回归**：362 passed, 2 deselected, 28 warnings（warnings 全是预存在第三方 deprecation）。
+- **pyflakes**：10 个新源文件零告警。
+- **真实 E2E（63 视频）**：63/63 done, 0 failed, 1 可靠命中（`_388.mp4` 第536秒，二次验证 has_target_item=true，AI 描述"有人从左走向右拖着黑色旅行袋"）。
+- **11 个 NVIDIA key 全活**（实测 PONG）。
+
 ## [5.5.0] — 2026-09-04 · 黑匣子透明化 Critic 闭环 + 小白易用弹窗 + 资源/内存安全
 
 ### 🧭 黑匣子透明化（Critic 轮1 全 MAJOR/MINOR 修复）

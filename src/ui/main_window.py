@@ -43,6 +43,7 @@ import cv2 # For thumbnails
 from src.ui.status_console import StatusConsole
 from PyQt6.QtCore import QRunnable, QThreadPool, QObject
 from src.ui.agent_panel import AgentPanel
+from src.ui.agent_dialog import AgentDialog
 from src.ui.model_manager_tab import ModelManagerTab
 from src.ui.api_intro_page import APIIntroPage
 from src.ui.help_dialog import HelpDialog
@@ -548,6 +549,7 @@ class DesktopApp(QMainWindow):
         
         self.init_backend()
         self.setup_ui()
+        self._init_agent_orchestrator()
         self.load_settings()
         
         # UI Sync: Force call on_client_changed to align visibility
@@ -1014,13 +1016,48 @@ class DesktopApp(QMainWindow):
         self.tabs.addTab(self.tab_decision_log, "🧭 决策日志")
 
         middle_layout.addWidget(self.tabs, stretch=1)
-        
+
+        # --- M5: Agent 对话主界面（豆包风格，主入口） ---
+        # 愿景1：软件进去是 agent 对话框（不是功能 tab 平铺）。
+        # AgentDialog 作为主界面，工具箱侧栏路由到各专属 UI（batch_tab /
+        # surveillance / models 等）。原 tabs 作为"传统功能"工具页接入。
+        self.agent_dialog = AgentDialog()
+        # 把已有 tabs 作为一个工具页接入（"传统功能 tab 平铺"作为工具项）
+        self.agent_dialog.add_tool_page(
+            "🎚️", "传统功能", self.tabs, "legacy_tabs")
+        # 监控分析 tab 作为独立工具项（愿景3：工具箱侧栏）
+        self.agent_dialog.add_tool_page(
+            "🎥", "监控分析", self.tab_surveillance, "surveillance")
+        # 批量监控 tab（M3 产物）作为工具项接入（愿景7：集成 batch_tab）
+        try:
+            from src.ui.batch_tab import BatchTab
+            from src.core.run_store import RunStore
+            self.tab_batch = BatchTab(config_manager=self.config_manager,
+                                      run_store=RunStore())
+            self.agent_dialog.add_tool_page(
+                "🎞", "批量监控", self.tab_batch, "batch")
+        except Exception as e:
+            logging.warning(f"[main_window] batch_tab 接入失败: {e}")
+        # 模型管理 tab 作为工具项（愿景6：agent 帮下模型入口）
+        self.agent_dialog.add_tool_page(
+            "📦", "模型管理", self.tab_models, "models")
+        # 工具箱点击 → agent 介入路由
+        self.agent_dialog.message_sent.connect(self.on_agent_dialog_message)
+        self.agent_dialog.tool_requested.connect(self.on_agent_dialog_tool)
+        self.agent_dialog.provider_config_requested.connect(
+            self.on_agent_dialog_config_provider)
+        self.agent_dialog.model_download_requested.connect(
+            self.on_agent_dialog_download_model)
+        middle_layout.addWidget(self.agent_dialog, stretch=1)
+
         # --- AGENT PANEL (Right Sliding) ---
         self.agent_panel = AgentPanel()
         self.agent_panel.send_message.connect(self.on_agent_query)
         self.agent_panel.regenerate_requested.connect(self.on_agent_query)
         self.agent_panel.stop_requested.connect(self.stop_agent_query)
         self.agent_panel.combo_model.currentIndexChanged.connect(self.on_agent_model_switched)
+        # M5：默认隐藏旧 AgentPanel（被 AgentDialog 取代为主入口）
+        self.agent_panel.setVisible(False)
         middle_layout.addWidget(self.agent_panel)
         
         # Button to toggle Agent
@@ -1335,6 +1372,150 @@ class DesktopApp(QMainWindow):
             # 等线程真正结束后由 on_chat_finished 统一清理 UI 状态。
             worker.finished.connect(self.on_chat_finished)
             logging.info("🛑 用户中止了 Agent 对话回复（等待线程退出...）")
+
+    # ------------------------------------------------------------------
+    # M5: AgentDialog 主入口接线
+    # ------------------------------------------------------------------
+
+    def _init_agent_orchestrator(self):
+        """构造 AgentOrchestrator（不真实调付费 API）。"""
+        from src.core.agent_orchestrator import AgentOrchestrator
+        try:
+            from src.skills import load_skills
+            skills = load_skills()
+        except Exception:
+            logging.debug("[agent_orchestrator] skills 加载失败", exc_info=True)
+            skills = ()
+        # llm_callback 为 None：GENERAL 意图降级为引导文案（不真实付费 API）
+        self._agent_orchestrator = AgentOrchestrator(
+            tool_registry=getattr(self, 'tool_registry', None),
+            llm_callback=None,
+            skills=skills,
+            append_step_cb=self._on_agent_step_done,
+        )
+
+    def on_agent_dialog_message(self, text: str, attachments: list):
+        """AgentDialog 发送消息 → orchestrator 解析意图 → 回复/计划。
+
+        愿景2：用户在对话框上传视频/照片/输入需求 → agent 自动语义分析 +
+        plan + 长程任务追踪 + 每步可追溯。
+        """
+        orch = self._agent_orchestrator
+        result = orch.handle_user_message(text, attachments)
+        intent = result["intent"]
+        skill = result.get("skill_name")
+        reply = result.get("reply", "")
+        # 显示 agent 回复（思考链 + 气泡）
+        self.agent_dialog.append_thoughts(
+            f"意图: {intent}" + (f" | skill: {skill}" if skill else ""))
+        self.agent_dialog.append_agent_message(reply, model_name="agent")
+        # 有工具计划：注入对话上下文 + 触发 ChatWorker 走原 LLM 链路
+        if result.get("plan_steps"):
+            plan_text = "；".join(
+                f"{s['step_id']}: {s['description']}" for s in result["plan_steps"])
+            logging.info(
+                f"[agent_dialog] 意图={intent} skill={skill} 计划={plan_text}")
+            # 若有可用 LLM 模型，把计划交给 ChatWorker 走原 ReAct 循环
+            if getattr(self, 'analyzer', None):
+                self._dispatch_agent_to_chat_worker(text, attachments, reply)
+            else:
+                self.agent_dialog.append_agent_message(
+                    "（未加载模型，仅返回计划。配好 Provider 加载模型后可自动执行。）")
+
+    def on_agent_dialog_tool(self, tool_id: str):
+        """工具箱点击 → 切到对应工具专属 UI 页（愿景3）。"""
+        # AgentDialog 内部已切 stacked 页，这里只做 agent 介入日志
+        logging.info(f"[agent_dialog] 用户切到工具: {tool_id}")
+        self.agent_dialog.append_thoughts(f"用户切换工具: {tool_id}")
+
+    def on_agent_dialog_config_provider(self):
+        """愿景5：agent 引导用户配 provider/key（对话式 + 测活性 + 入库）。"""
+        # 切到传统功能 tab 的模型配置区，让用户填表
+        self.agent_dialog.stacked.setCurrentIndex(1)  # legacy_tabs 页
+        self.tabs.setCurrentWidget(self.tab_api_help)
+        self.agent_dialog.append_agent_message(
+            "我来帮你配 Provider。\n"
+            "1. 在左侧选客户端类型（Ollama/API/LM Studio）\n"
+            "2. 填 API URL + Key（Key 存系统密钥环，不入库）\n"
+            "3. 点「检测连接」我帮你测活性\n"
+            "4. 选模型 → 加载 → 完成"
+        )
+
+    def on_agent_dialog_download_model(self, model_id: str):
+        """愿景6：agent 帮下模型（接 ModelManagerTab + SHA256 校验）。"""
+        # 切到模型管理工具页（在 AgentDialog 工具箱里）
+        for i in range(self.agent_dialog.stacked.count()):
+            w = self.agent_dialog.stacked.widget(i)
+            if w is self.tab_models:
+                self.agent_dialog.stacked.setCurrentIndex(i)
+                break
+        self.agent_dialog.append_agent_message(
+            f"我来帮你下载模型 {model_id}。\n"
+            "下载完成后自动跑 SHA256 校验（防篡改）。\n"
+            "在右侧模型管理面板点对应卡片「📥 下载」即可。"
+        )
+
+    def _on_agent_step_done(self, step):
+        """orchestrator 每步完成回调 → 显示到对话（愿景4：每步可追溯）。"""
+        self.agent_dialog.append_tool_call(
+            step.tool_name, step.args, step.result or "")
+        # 决策结果（continue/stop/switch）
+        orch = self._agent_orchestrator
+        decision = orch.on_task_step_done(step)
+        if decision == "stop":
+            self.agent_dialog.append_agent_message(
+                f"⚠️ 步骤 {step.step_id} 失败 3 次，已停止。请检查后重试。")
+        elif decision == "switch":
+            self.agent_dialog.append_agent_message(
+                f"步骤 {step.step_id} 出错，我换一种策略重试。")
+
+    def _dispatch_agent_to_chat_worker(self, text: str, attachments: list,
+                                       plan_reply: str):
+        """把 agent 对话消息转给 ChatWorker 走原 LLM ReAct 链路。
+
+        复用 on_agent_query 的 system prompt + tool_registry 注入逻辑，
+        不重写流式接收；chunk 回投到 agent_dialog（新主界面）。
+        """
+        if not getattr(self, 'analyzer', None):
+            return
+        from src.core.agent_prompt import build_system_prompt, match_skills
+        tool_desc = self.tool_registry.get_tool_descriptions() if hasattr(
+            self, 'tool_registry') else ""
+        active_skills = None
+        try:
+            from src.skills import load_skills
+            active_skills = match_skills(text, load_skills())
+        except Exception:
+            pass
+        system_prompt = build_system_prompt(
+            tool_descriptions=tool_desc,
+            context=getattr(self, 'agent_system_context', None),
+            active_skills=active_skills,
+        )
+        full_prompt = (system_prompt + "\n\nUser Question: " + text
+                       if system_prompt else text)
+        model = self.agent_panel.combo_model.currentText() or ""
+        if not model:
+            self.agent_dialog.append_agent_message(
+                "（未选模型，无法执行。请在传统功能 tab 加载模型后重试。）")
+            return
+        # 用 ChatWorker 跑流式，chunk 回投到 agent_dialog（新主界面）
+        self.chat_worker = ChatWorker(
+            self.analyzer.client, model, full_prompt,
+            image_paths=None, tool_registry=getattr(self, 'tool_registry', None))
+        self.chat_worker.chunk_received.connect(self._on_agent_dialog_chunk)
+        self.chat_worker.finished.connect(self.on_chat_finished)
+        try:
+            self.chat_worker.entry_append.connect(self.tab_decision_log.append_entry)
+        except Exception:
+            pass
+        self.chat_worker.start()
+
+    def _on_agent_dialog_chunk(self, chunk: str):
+        """ChatWorker 流式 chunk → AgentDialog 最近气泡。"""
+        if not chunk:
+            return
+        self.agent_dialog.update_last_bubble(chunk)
 
     def update_slider_label(self, val):
         self.lbl_slider_val.setText(f"当前值: {val} 帧/分钟")
