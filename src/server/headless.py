@@ -167,7 +167,8 @@ class Handler(BaseHTTPRequestHandler):
             data = self.rfile.read(length)
             filename = self.headers.get("X-Filename", "upload.mp4")
         else:
-            boundary = ctype.split("boundary=")[-1].encode()
+            bval = ctype.split("boundary=")[-1].split(";")[0].strip().strip(chr(34))
+            boundary = bval.encode()
             body = self.rfile.read(length)
             data, filename = self._parse_multipart(body, boundary)
 
@@ -182,18 +183,28 @@ class Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": str(e)})
 
     def _parse_multipart(self, body: bytes, boundary: bytes):
-        """极简 multipart 解析（单文件字段）。"""
-        parts = body.split(b"--" + boundary)
+        """multipart 解析（单文件字段）。
+
+        RFC 2046: part 边界是 \r\n--boundary；closing 边界是 \r\n--boundary--。
+        裸 --boundary 切分会把恰好含该序列的二进制流截断。
+        """
+        delim = b"\r\n--" + boundary
+        closing = delim + b"--"
+        # 先把 closing 边界替换为普通边界，统一处理
+        body = body.replace(closing, delim)
+        parts = body.split(delim)
         for part in parts:
-            if b"filename=" in part:
-                header, _, payload = part.partition(b"\r\n\r\n")
-                payload = payload.rsplit(b"\r\n", 1)[0]
-                fn_line = [l for l in header.split(b"\r\n") if b"filename=" in l]
-                filename = "upload.mp4"
-                if fn_line:
-                    fn = fn_line[0].split(b"filename=")[-1].strip(b'" ')
-                    filename = fn.decode("utf-8", errors="replace") or filename
-                return payload, filename
+            if b"filename=" not in part or b"\r\n\r\n" not in part:
+                continue
+            header, _, payload = part.partition(b"\r\n\r\n")
+            if payload.endswith(b"\r\n"):
+                payload = payload[:-2]
+            fn_line = [l for l in header.split(b"\r\n") if b"filename=" in l]
+            filename = "upload.mp4"
+            if fn_line:
+                fn = fn_line[0].split(b"filename=")[-1].strip(b'" ')
+                filename = fn.decode("utf-8", errors="replace") or filename
+            return payload, filename
         return b"", "upload.mp4"
 
 

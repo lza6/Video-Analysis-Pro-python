@@ -335,8 +335,12 @@ class VideoProcessor:
         
         logger.info(f"正在进行语义级帧去重 (CLIP)，初始帧数: {len(frames)}...")
         try:
-            # Using a very light model for speed
-            model = SentenceTransformer('clip-ViT-B-32')
+            # 统一走共享 embedder（避免每次调用重新加载 15s+/1GB）
+            from src.core.kb_indexer import get_embedder
+            model = get_embedder()
+            if model is None:
+                logger.warning("语义去重跳过: embedder 加载失败")
+                return frames
             
             # Encode images
             image_paths = [str(f.path) for f in frames]
@@ -691,16 +695,28 @@ class OllamaClient(BaseAPIClient):
         self._session = requests.Session()
         self._session.trust_env = False
 
-    def chat_stream(self, model: str, prompt: str, image_paths: Optional[List[str]] = None, temperature: float = 0.2, timeout: int = 600) -> Iterator[str]:
-        # Logic to support images in Ollama
+    def chat_stream(self, model: str, prompt, image_paths: Optional[List[str]] = None, temperature: float = 0.2, timeout: int = 600) -> Iterator[str]:
+        """prompt 可为 str（单轮）或 messages 列表（多轮 ReAct）。
+
+        Logic to support images in Ollama
+        """
         images_base64 = []
         if image_paths:
             for p in image_paths:
                 images_base64.append(self._encode_image_to_base64(p))
 
+        if isinstance(prompt, list):
+            msgs = [dict(m) for m in prompt]
+            for m in reversed(msgs):
+                if m.get("role") == "user" and image_paths:
+                    m["images"] = images_base64
+                    break
+        else:
+            msgs = [{"role": "user", "content": prompt, "images": images_base64}]
+
         payload = {
             "model": model,
-            "messages": [{"role": "user", "content": prompt, "images": images_base64}],
+            "messages": msgs,
             "stream": True,
             "temperature": temperature,
             "options": {"num_ctx": self.num_ctx}
@@ -823,11 +839,32 @@ class APIGatewayClient(BaseAPIClient):
             return []
         return []
 
-    def chat_stream(self, model: str, prompt: str, image_paths: Optional[List[str]] = None, temperature: float = 0.2, timeout: int = 600) -> Iterator[str]:
+    def chat_stream(self, model: str, prompt, image_paths: Optional[List[str]] = None, temperature: float = 0.2, timeout: int = 600) -> Iterator[str]:
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-        
-        # Split prompt into System and User if system tags are present.
-        # content 可以是 str 或 OpenAI 多模态 parts 列表。
+
+        # messages 列表直通（多轮 ReAct，ChatWorker B2 改造使用）
+        messages: List[Dict[str, Any]]
+        if isinstance(prompt, list):
+            messages = [dict(m) for m in prompt]
+        else:
+            messages = self._prompt_to_messages(prompt)
+
+        # Inject images into the LAST message if it's a user message
+        if image_paths and messages and messages[-1]["role"] == "user":
+            last_content = messages[-1]["content"]
+            if isinstance(last_content, str):
+                content_parts: List[Dict[str, Any]] = [{"type": "text", "text": last_content}]
+                for image_path in image_paths:
+                    base64_image = self._encode_image_to_base64(image_path)
+                    content_parts.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}})
+                messages[-1]["content"] = content_parts
+
+        # Try streaming first, but be ready for non-streaming
+        payload = {"model": model, "messages": messages, "temperature": temperature, "stream": True}
+        yield from self._stream_openai_payload(payload, headers, timeout)
+
+    def _prompt_to_messages(self, prompt: str) -> List[Dict[str, Any]]:
+        """单轮 str prompt → messages（含 --- System Context --- 解析）。"""
         messages: List[Dict[str, Any]] = []
         if "--- System Context ---" in prompt:
             parts = prompt.split("--- System Context ---")
@@ -842,36 +879,28 @@ class APIGatewayClient(BaseAPIClient):
                 messages.append({"role": "user", "content": prompt})
         else:
             messages.append({"role": "user", "content": prompt})
+        return messages
 
-        # Inject images into the LAST message if it's a user message
-        if image_paths and messages[-1]["role"] == "user":
-            content_parts = [{"type": "text", "text": messages[-1]["content"]}]
-            for image_path in image_paths:
-                base64_image = self._encode_image_to_base64(image_path)
-                content_parts.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}})
-            messages[-1]["content"] = content_parts
-
-        # Try streaming first, but be ready for non-streaming
-        payload = {"model": model, "messages": messages, "temperature": temperature, "stream": True}
-        
+    def _stream_openai_payload(self, payload: Dict[str, Any], headers: Dict[str, str], timeout: int = 600) -> Iterator[str]:
+        """发送 OpenAI 兼容流式请求并 yield 纯文本 delta（含 <think> 包装）。"""
         try:
             logger.info(f"发送 API 请求: {self.chat_endpoint} stream=True")
             with requests.post(self.chat_endpoint, headers=headers, json=payload, stream=True, timeout=timeout) as response:
                 response.raise_for_status()
-                
+
                 content_type = response.headers.get("Content-Type", "").lower()
                 logger.info(f"收到响应: Status={response.status_code}, Type={content_type}")
-                
+
                 # Case 1: Standard Streaming (SSE)
                 if "text/event-stream" in content_type:
                     line_count = 0
                     for line in response.iter_lines():
                         if not line: continue
-                        
+
                                     # Debug logic: Log first 5 lines to understand format
                         line_count += 1
                         # if line_count <= 5: logger.debug(f"Stream Line {line_count}: {line}")
-                            
+
                         # Robust check: startswith b'data:' (optional space)
                         if line.startswith(b'data:'):
                             # Remove prefix, robustly
@@ -888,12 +917,12 @@ class APIGatewayClient(BaseAPIClient):
                                 chunk = json.loads(decoded)
                                 if 'choices' in chunk and len(chunk['choices']) > 0:
                                     delta = chunk['choices'][0].get('delta', {})
-                                    
+
                                     # Support 'reasoning_content'
                                     reasoning = delta.get('reasoning_content', "")
                                     if reasoning:
                                         yield f"<think>{reasoning}</think>"
-                                        
+
                                     content = delta.get('content', "")
                                     if content:
                                         yield content
@@ -903,13 +932,13 @@ class APIGatewayClient(BaseAPIClient):
                                 logger.warning(f"JSON Parse Error on line: {decoded[:50]}... -> {e}")
                         else:
                             pass # skip non-data lines
-                            
+
                 # Case 2: Non-streaming (JSON) - API ignored stream=True or doesn't support it
                 elif "application/json" in content_type.lower():
                     data = response.json()
                     # Robust search for content in standard and common custom formats
                     target_data = data
-                    
+
                     # 1. Check if 'body' contains a nested OpenAI-like object or is the direct content
                     if 'body' in data and data['body'] is not None:
                         if isinstance(data['body'], dict):
@@ -924,7 +953,7 @@ class APIGatewayClient(BaseAPIClient):
                             if isinstance(val, dict) and 'choices' in val:
                                 target_data = val
                                 break
-                
+
                     # 3. Handle standard 'choices' format if found
                     if 'choices' in target_data and isinstance(target_data['choices'], list) and len(target_data['choices']) > 0:
                          message = target_data['choices'][0].get('message', {})
@@ -935,12 +964,12 @@ class APIGatewayClient(BaseAPIClient):
                     else:
                         # 4. Final Fallback: Log and search for any content-bearing keys
                         logger.warning(f"Non-standard API response keys: {list(data.keys())}. Value of 'body': {type(data.get('body'))}")
-                        
+
                         # Use 'msg' if 'body' is None/missing, as some APIs return errors in 'msg'
                         fallback = (data.get('body') if isinstance(data.get('body'), str) else None) or \
                                    data.get('result') or data.get('response') or data.get('text') or \
                                    data.get('output') or data.get('content') or data.get('msg')
-                        
+
                         if fallback:
                             if isinstance(fallback, str):
                                 yield fallback
@@ -962,7 +991,7 @@ class APIGatewayClient(BaseAPIClient):
                     text = response.text
                     logger.warning(f"未知 Content-Type, 返回原始文本: {text[:100]}...")
                     yield text
-                    
+
         except Exception as e:
             logger.error(f"API 请求失败: {e}")
             yield f'Error: {str(e)}'

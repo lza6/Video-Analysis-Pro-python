@@ -156,7 +156,7 @@ class AnthropicBackend(ProtocolBackend):
                         elif d.get("type") == "thinking_delta":
                             yield f"<think>{d.get('thinking', '')}</think>"
         except Exception as e:
-            yield f"[Anthropic error: {e}]"
+            yield f"[LLM_ERROR] {e}"
 
     def list_models(self):
         try:
@@ -210,7 +210,7 @@ class OpenAIChatBackend(ProtocolBackend):
                         ev = json.loads(data)
                     except json.JSONDecodeError:
                         continue
-                    delta = ev.get("choices", [{}])[0].get("delta", {})
+                    delta = (ev.get("choices") or [{}])[0].get("delta", {})
                     rc = delta.get("reasoning_content")
                     if rc:
                         yield f"<think>{rc}</think>"
@@ -218,7 +218,7 @@ class OpenAIChatBackend(ProtocolBackend):
                     if c:
                         yield c
         except Exception as e:
-            yield f"[OpenAI error: {e}]"
+            yield f"[LLM_ERROR] {e}"
 
     def list_models(self):
         try:
@@ -276,7 +276,7 @@ class OpenAIResponsesBackend(ProtocolBackend):
                     elif t == "response.reasoning.delta":
                         yield f"<think>{ev.get('delta', '')}</think>"
         except Exception as e:
-            yield f"[Responses error: {e}]"
+            yield f"[LLM_ERROR] {e}"
 
 
 class GeminiBackend(ProtocolBackend):
@@ -307,9 +307,11 @@ class GeminiBackend(ProtocolBackend):
         if system:
             payload["systemInstruction"] = {"parts": [{"text": system}]}
         url = (f"{self.base_url}/v1beta/models/{self.model}:streamGenerateContent"
-               f"?key={self.api_key}&alt=sse")
+               f"?alt=sse")
+        # key 走 header 而非 URL：URL 会随异常文本流入日志/对话（凭据泄漏）
+        gem_headers = {"x-goog-api-key": self.api_key}
         try:
-            with self._post_with_retry(url, headers={}, payload=payload) as resp:
+            with self._post_with_retry(url, headers=gem_headers, payload=payload) as resp:
                 resp.raise_for_status()
                 for raw in resp.iter_lines(decode_unicode=True):
                     if not raw or not raw.startswith("data: "):
@@ -325,7 +327,7 @@ class GeminiBackend(ProtocolBackend):
                             elif p.get("text"):
                                 yield p["text"]
         except Exception as e:
-            yield f"[Gemini error: {e}]"
+            yield f"[LLM_ERROR] {e}"
 
 
 # ---- 协议路由 ----

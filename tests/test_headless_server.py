@@ -98,3 +98,48 @@ def subprocess_popen(port):
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+
+class TestParseMultipart:
+    """multipart 解析器单测（Critical #2/#3 回归）。"""
+
+    def _parse(self, body, boundary):
+        from src.server.headless import Handler
+        h = Handler.__new__(Handler)
+        return Handler._parse_multipart.__get__(h)(body, boundary)
+
+    def test_normal_with_closing(self):
+        body = (b"--X\r\n"
+                b'Content-Disposition: form-data; filename="v.mp4"\r\n\r\n'
+                b"\x00\x01\x02VIDEO\r\n"
+                b"--X--\r\n")
+        data, fn = self._parse(body, b"X")
+        assert data == b"\x00\x01\x02VIDEO"
+        assert fn == "v.mp4"
+
+    def test_binary_with_bare_boundary_seq_not_split(self):
+        """payload 含裸 --X（无 \r\n 前导）不得截断（旧实现 bug）。"""
+        body = (b"--X\r\n"
+                b'Content-Disposition: form-data; filename="v.mp4"\r\n\r\n'
+                b"\x00\x01--XTAIL_BINARY\x00\xff\r\n"
+                b"--X--\r\n")
+        data, _ = self._parse(body, b"X")
+        assert data == b"\x00\x01--XTAIL_BINARY\x00\xff"
+
+    def test_no_closing_tolerated(self):
+        body = (b"--X\r\n"
+                b'Content-Disposition: form-data; filename="v.mp4"\r\n\r\n'
+                b"\x00\x01\x02DATA\r\n"
+                b"--X\r\n")
+        data, _ = self._parse(body, b"X")
+        assert data == b"\x00\x01\x02DATA"
+
+    def test_quoted_boundary_in_ctype(self):
+        """quoted boundary（RFC 合法）不得解析失败——在 do_POST 层 strip 引号，
+        这里验证 _parse 接受去引号后的值。"""
+        body = (b"--Y\r\n"
+                b'Content-Disposition: form-data; filename="v.mp4"\r\n\r\n'
+                b"DATA\r\n"
+                b"--Y--\r\n")
+        data, _ = self._parse(body, b"Y")
+        assert data == b"DATA"

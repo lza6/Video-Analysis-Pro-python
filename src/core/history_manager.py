@@ -100,8 +100,11 @@ class HistoryManager:
             return False
         try:
             collection = self.chroma_client.get_or_create_collection(name=self.KB_COLLECTION_NAME)
-            frame_id = f"{session_id}_{timestamp:.3f}"
-            # upsert 防止重复分析同一视频时 id 冲突
+            # 同一会话可能分析多个视频，相同时间戳（0.0s/1.0s…）会互相
+            # upsert 覆盖 → frame_id 必须含视频名（消毒后）
+            import re as _re
+            safe_vname = _re.sub(r"[^\w]", "_", video_name)[:40]
+            frame_id = f"{session_id}_{safe_vname}_{timestamp:.6f}"
             collection.upsert(
                 ids=[frame_id],
                 embeddings=[embedding.tolist()],
@@ -185,9 +188,9 @@ class HistoryManager:
             collection = self.chroma_client.get_or_create_collection(
                 name=self.PREFS_COLLECTION_NAME)
             emb = embedder.encode([content], convert_to_tensor=False)[0]
-            import time as _t
+            import time as _t, uuid as _u
             collection.upsert(
-                ids=[f"pref_{int(_t.time() * 1000)}"],
+                ids=[f"pref_{int(_t.time() * 1000)}_{_u.uuid4().hex[:8]}"],
                 embeddings=[emb.tolist()],
                 metadatas=[{"kind": kind, "content": content[:300],
                             "created": _t.strftime("%Y-%m-%d %H:%M:%S")}],

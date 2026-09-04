@@ -211,7 +211,9 @@ class ChatWorker(QThread):
                 
                 full_response = ""
                 # Stream content
-                for chunk in self.client.chat_stream(self.model, messages, self.image_paths):
+                # 图片只在首轮携带（base64 每轮重传浪费 token）
+                round_images = self.image_paths if turn == 0 else None
+                for chunk in self.client.chat_stream(self.model, messages, round_images):
                      if not self._is_running: break
                      if chunk:
                          self.chunk_received.emit(chunk)
@@ -221,7 +223,10 @@ class ChatWorker(QThread):
                 if not self._is_running: break
 
                 # Robust tool extraction (XML or Logic)
-                match = tool_pattern.search(full_response) or react_pattern.search(full_response)
+                # 关键: 先剥思考段——模型"想过"调用工具 ≠ 真的调用
+                import re as _re
+                _clean = _re.sub(r'<think>.*?</think>', '', full_response, flags=_re.DOTALL)
+                match = tool_pattern.search(_clean) or react_pattern.search(_clean)
                 
                 if match and self.tool_registry:
                     tool_name = match.group(1)
@@ -253,8 +258,10 @@ class ChatWorker(QThread):
                         
                         # B2: 对话历史追加（assistant 回答 + 观察结果），而非字符串拼接
                         messages.append({"role": "assistant", "content": full_response})
+                        # token 防爆: 工具结果截断（search_web/search_kb 可返回大 JSON）
+                        result_text = str(result)[:2000]
                         messages.append({"role": "user",
-                                         "content": "Tool " + tool_name + " returned: \n\n" + result + "\n\n请基于以上观察继续回答用户。"},)
+                                         "content": "Tool " + tool_name + " returned: \n\n" + result_text + "\n\n请基于以上观察继续回答用户。"})
                         continue
                         
                     except Exception as e:
@@ -1210,22 +1217,29 @@ class DesktopApp(QMainWindow):
 
 
     def on_chat_finished(self):
+        # 防重入（stop 路径会连两次 finished：自定义+内建）
+        if getattr(self, '_chat_finished_handled', False):
+            return
+        self._chat_finished_handled = True
         self.agent_panel.update_thoughts("回答完成。")
         self.agent_panel.btn_stop.setEnabled(False)
         self.agent_panel.btn_send.setEnabled(True)
-        
-        # Safely clean up worker
-        if hasattr(self, 'chat_worker') and self.chat_worker:
-            self.chat_worker.deleteLater()
-            # Do NOT set to None immediately if we want to be 100% safe from 'Destroyed while thread is running'
-            # But in PyQt6, deleteLater is usually sufficient as it waits for thread finish.
+
+        worker = getattr(self, 'chat_worker', None)
+        if worker is not None:
+            worker.deleteLater()
+            self.chat_worker = None  # 释放引用，防止旧 worker 污染新一轮
+        self._chat_finished_handled = False
 
 
     def stop_agent_query(self):
-        if hasattr(self, 'chat_worker') and self.chat_worker:
-            self.chat_worker.stop()
-            logging.info("🛑 用户中止了 Agent 对话回复")
-            self.on_chat_finished()
+        worker = getattr(self, 'chat_worker', None)
+        if worker is not None:
+            worker.stop()
+            # 竞态修复: 不能立即 deleteLater（线程可能仍阻塞在网络读）。
+            # 等线程真正结束后由 on_chat_finished 统一清理 UI 状态。
+            worker.finished.connect(self.on_chat_finished)
+            logging.info("🛑 用户中止了 Agent 对话回复（等待线程退出...）")
 
     def update_slider_label(self, val):
         self.lbl_slider_val.setText(f"当前值: {val} 帧/分钟")
@@ -1758,9 +1772,15 @@ class DesktopApp(QMainWindow):
         )
 
     def seek_video(self, ts):
-        """Unified jump method for Agent tools (used by point_and_jump)."""
+        """Unified jump method for Agent tools (used by point_and_jump).
+
+        线程安全：工具在 ChatWorker 线程执行，Qt widget 操作必须回主线程。
+        """
         logging.info(f"Agent requested jump to {ts}s")
-        # If the video player dialog is open, seek it
+        QTimer.singleShot(0, lambda: self._seek_video_main(ts))
+
+    def _seek_video_main(self, ts):
+        """主线程执行的实际跳转。"""
         from src.ui.video_player_dialog import VideoPlayerDialog
         for widget in QApplication.topLevelWidgets():
             if isinstance(widget, VideoPlayerDialog):
@@ -2124,15 +2144,19 @@ class DesktopApp(QMainWindow):
             item_layout.setContentsMargins(5,5,5,5)
             
             # Clickable Image
+            # Clickable Image — 异步加载（ImageLoader 池），主线程只设占位
+            # 历史 bug: 主线程同步 QPixmap 最多 10000 帧 → UI 冻结分钟级
+            btn_img = ClickableLabel()
+            btn_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            btn_img.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_img.clicked.connect(lambda f=frame: self.show_frame_details(f))
             if frame.path.exists():
-                from PyQt6.QtGui import QPixmap
-                pix = QPixmap(str(frame.path)).scaled(200, 140, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                btn_img = ClickableLabel()
-                btn_img.setPixmap(pix)
-                btn_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                btn_img.setCursor(Qt.CursorShape.PointingHandCursor)
-                btn_img.clicked.connect(lambda f=frame: self.show_frame_details(f))
-                item_layout.addWidget(btn_img)
+                loader = ImageLoader(frame)
+                loader.signals.loaded.connect(
+                    lambda f, pix, lbl=btn_img: lbl.setPixmap(pix))
+                self.image_pool.start(loader)
+                btn_img.setText("...")
+            item_layout.addWidget(btn_img)
             
             # Label
             lbl = QLabel(f"{frame.timestamp:.2f}s")

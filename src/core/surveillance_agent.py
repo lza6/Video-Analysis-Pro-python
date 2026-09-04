@@ -233,13 +233,17 @@ class SurveillanceAgent:
         监控场景下关键物品可能在画面中很小/部分可见，阈值不宜太高。
         """
         try:
-            from sentence_transformers import SentenceTransformer, util
+            from sentence_transformers import util
             from PIL import Image
+            from src.core.kb_indexer import get_embedder
         except ImportError:
             logger.warning("CLIP 不可用，跳过预筛，全帧送 VLM")
             return frames
         try:
-            model = SentenceTransformer('clip-ViT-B-32')
+            model = get_embedder()
+            if model is None:
+                logger.warning("embedder 加载失败，跳过预筛")
+                return frames
             item_img = Image.open(self.key_item_image)
             item_emb = model.encode([item_img], convert_to_tensor=True,
                                     show_progress_bar=False)

@@ -144,19 +144,33 @@ class RtspMonitor:
         with self._lock:
             self.events.append(StreamEvent(timestamp=ts, kind="motion",
                                            frame_path=str(fp)))
+            # 防内存泄漏: 事件与帧文件上限（保留最近 500 条）
+            if len(self.events) > 500:
+                old = self.events.pop(0)
+                try:
+                    Path(old.frame_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
         logger.info(f"[RTSP] 运动检测 @ {time.strftime('%H:%M:%S', time.localtime(ts))}")
 
-        # VLM 确认（冷却期内跳过）
+        # VLM 确认（冷却期内跳过）—— 投递到独立工作线程，绝不能阻塞读流线程
+        # （VLM 调用可达 30-600s，阻塞会导致 RTSP 缓冲堆积→流中断→重连循环）
         if self.key_item_image and ts - self._last_vlm >= self.vlm_cooldown:
             self._last_vlm = ts
-            hit = self._vlm_check(str(fp))
-            if hit:
-                with self._lock:
-                    ev = StreamEvent(timestamp=ts, kind="hit", frame_path=str(fp),
-                                     detail=hit.get("reason", ""),
-                                     confidence=float(hit.get("confidence", 0)))
-                    self.events.append(ev)
-                logger.info(f"[RTSP] ★ 命中: {hit.get('reason', '')[:60]}")
+            frame_path = str(fp)
+            t = threading.Thread(target=self._vlm_worker, args=(ts, frame_path), daemon=True)
+            t.start()
+
+    def _vlm_worker(self, ts: float, frame_path: str):
+        """独立线程执行 VLM 判断（结果回写 events）。"""
+        hit = self._vlm_check(frame_path)
+        if hit:
+            with self._lock:
+                ev = StreamEvent(timestamp=ts, kind="hit", frame_path=frame_path,
+                                 detail=hit.get("reason", ""),
+                                 confidence=float(hit.get("confidence", 0)))
+                self.events.append(ev)
+            logger.info(f"[RTSP] ★ 命中: {hit.get('reason', '')[:60]}")
 
     def _vlm_check(self, frame_path: str) -> Optional[dict]:
         import re, json
