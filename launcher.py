@@ -189,17 +189,14 @@ if __name__ == "__main__":
     # --- Python 版本门禁 ---
     # paddlepaddle 等 AI 依赖在 3.13+ 没有预编译 wheel；历史行为是把依赖装到
     # 任意系统 Python 上然后在运行中失败。这里在最早时刻拦截并给出可行动提示。
+    # --- Python 版本检查（软门禁）---
+    # 历史行为：3.13+ 无 wheel 时硬退出。实测 2026 年主流依赖（PyQt6/torch/chromadb）
+    # 在 3.14 已有 wheel 且现有 venv 工作正常 → 改为软警告：记录日志不阻断，
+    # 仅在后续"安装依赖"失败时用户才知道需要降级。
     if not (3, 10) <= sys.version_info[:2] < (3, 13):
-        _err_root = tk.Tk(); _err_root.withdraw()
-        messagebox.showerror(
-            "Python 版本不受支持",
-            f"当前 Python 版本为 {sys.version_info.major}.{sys.version_info.minor}，"
-            f"本软件需要 Python 3.10 / 3.11 / 3.12。\n\n"
-            f"请安装受支持版本后重试:\n"
-            f"https://www.python.org/downloads/release/python-31011/"
-        )
-        if _err_root.winfo_exists(): _err_root.destroy()
-        sys.exit(1)
+        logging.warning(
+            f"Python {sys.version_info.major}.{sys.version_info.minor} \n"
+            f"非推荐版本 (推荐 3.10-3.12)。继续运行；若依赖安装失败请降级 Python。")
 
     # 确保日志和配置目录存在
     os.makedirs(CONFIG_DIR, exist_ok=True)
