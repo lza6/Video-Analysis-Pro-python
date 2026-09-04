@@ -19,7 +19,7 @@ scenedetect>=0.6.2
 ultralytics>=8.3.0               # YOLOv11 需要 8.3+
 moviepy>=2.0                     # 代码已迁移到 moviepy 2.x API (subclipped/resized)
 imageio-ffmpeg                   # 自带 FFmpeg 二进制，实现 FFmpeg 自给自足
-pillow>=12.3.0                   # 12.x 修复多个图像解析 CVE (PYSEC-2026-165 等)
+pillow>=11.3,<12                 # moviepy 2.2 上限 pillow<12；11.3 已含已知图像解析 CVE 修复
 matplotlib>=3.7                  # plot_metrics / get_advanced_video_metrics
 seaborn>=0.13                    # _detect_advanced_features 必需项：缺失时 Phase 3 摘要媒体全链路被禁用
 pandas<3                         # seaborn 依赖；pandas 3.x 要求 numpy>=2.3 与上面 numpy<2.3 约束冲突
