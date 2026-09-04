@@ -84,9 +84,14 @@ class TestServerErrorResponses:
         assert issubclass(_ServerBusy, Exception)
 
     def test_500_response_generic_message(self):
-        """读 do_POST 源码确认 500 不回 str(e)。"""
+        """读 do_POST 源码确认 500 响应体不含 str(e)（只回通用 message）。"""
+        import re
         import inspect
         from src.server.headless import Handler
         src = inspect.getsource(Handler.do_POST)
-        assert "str(e)" not in src, "500 仍回传 str(e)，泄露内部路径"
-        assert "analysis failed" in src
+        # 提取 500 响应行（self._json(500, ...)），验证其 payload 不含 str(e)
+        m = re.search(r"self\._json\(500,\s*(\{.*?\})\)", src, re.DOTALL)
+        assert m, "do_POST 缺 500 响应分支"
+        payload = m.group(1)
+        assert "str(e)" not in payload, f"500 响应体回传了 str(e)：{payload}"
+        assert "analysis failed" in payload
