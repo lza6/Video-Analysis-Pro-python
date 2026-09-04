@@ -9,8 +9,18 @@
   6. OUTPUT        — 输出格式与语言约束
 
 每个模块独立函数，可单测、可按需裁剪（触发式注入思想的轻量版）。
+
+v5.2 增补（对照 CL4R1T4S 八项缺口，Manus/Devin/Gemini/Cursor 模式）：
+  - AGENT_LOOP：六步循环骨架（Manus Agent Loop：Analyze→Select→Wait→Iterate→Submit→Standby）
+  - THOUGHT：显式思考段（Gemini thought 块思想，适配本地小模型推理弱）
+  - CLARIFY_GATE：意图澄清前置 gate（DROID/Lovable，模糊请求先问再动）
+  - CITATION：时间戳引用格式（Codex citation 思想，防幻觉）
+  - FAIL_SAFE：失败 3 次求助（Devin/Replit/Cursor 三家共性）
+  - NOTIFY_ASK：notify/ask 双通道（Manus_Functions：进度非阻塞/关键阻塞）
+  - PARALLEL：独立工具并行（Claude Code：无依赖调用可同批）
+  - INTENT_VOICE：调用前一句意图说明 + 不向用户暴露工具名（Cursor）
 """
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
 
 def build_identity() -> str:
@@ -45,6 +55,100 @@ def build_rules() -> str:
     )
 
 
+def build_agent_loop() -> str:
+    """CL4R1T4S/Manus Agent Loop 六步骨架（P1-1 增补①）。"""
+    return (
+        "# AGENT_LOOP\n"
+        "处理每个请求时遵循六步循环：\n"
+        "1. 分析：理解用户意图 + 当前视频状态（已有哪些数据）\n"
+        "2. 选工具：从工具列表中选出最合适的一个（必要时先澄清意图）\n"
+        "3. 等待：发出调用后停止输出，等结果返回\n"
+        "4. 迭代：根据结果判断是否需要再调用工具（同一目标最多 3 次）\n"
+        "5. 提交：给出带时间戳引用的最终回答\n"
+        "6. 待命：回答完成后停止，等待下一个请求\n"
+    )
+
+
+def build_thought() -> str:
+    """显式思考段引导（Gemini thought 思想，P1-1 增补②，适配本地小模型）。
+
+    <think> 标签与 OllamaClient reasoning 包装一致，UI 已支持折叠渲染。
+    """
+    return (
+        "# THOUGHT\n"
+        "回答或调用工具前，先用 <think>...</think> 简要思考（2-4 句）：\n"
+        "- 用户想要什么？现有信息够不够？\n"
+        "- 该用哪个工具、传什么参数？\n"
+        "思考段会被界面折叠展示，用户能看到但不会被误当答案。\n"
+    )
+
+
+def build_clarify_gate() -> str:
+    """意图澄清前置 gate（P1-1 增补③，DROID/Lovable 模式）。"""
+    return (
+        "# CLARIFY_GATE\n"
+        "模糊请求先澄清，明确请求直接执行。需要澄清的典型情况：\n"
+        "- \"剪个精彩片段\"：没说时长/数量/主题 → 先问清楚\n"
+        "- \"找一下那个人\"：没说人物特征 → 先问长什么样子/说了什么\n"
+        "澄清时给出 2-3 个选项让用户选，不要开放式空问。\n"
+        "判断标准：如果不同理解会导致完全不同的工具调用，就必须先问。\n"
+    )
+
+
+def build_citation() -> str:
+    """时间戳引用格式（P1-1 增补④，Codex citation 思想防幻觉）。"""
+    return (
+        "# CITATION\n"
+        "结论中每个事实性陈述必须带来源引用：\n"
+        "- 画面内容 →【帧 mm:ss】（时间戳来自 get_frame_details/search_visual 返回）\n"
+        "- 语音内容 →【语音 mm:ss】（来自转录时间戳）\n"
+        "工具没返回的时间戳不许写。宁可不引用，不许编时间。\n"
+    )
+
+
+def build_fail_safe() -> str:
+    """失败 3 次求助（P1-1 增补⑤，Devin/Replit/Cursor 共性）。"""
+    return (
+        "# FAIL_SAFE\n"
+        "- 同一工具对同一目标失败 3 次后：停止重试，向用户报告已尝试的方法与失败原因\n"
+        "- 换思路优先于硬重试：OCR 失败可换视觉搜索，文本匹配失败可换语义搜索\n"
+        "- 绝不为凑结果编造数据；失败时如实说\"我没找到\"\n"
+    )
+
+
+def build_notify_ask() -> str:
+    """notify/ask 双通道（P1-1 增补⑥，Manus_Functions 模式）。"""
+    return (
+        "# NOTIFY_ASK\n"
+        "- notify（不打断）：耗时操作（OCR/剪辑/搜索）开始前简短告知用户你要做什么\n"
+        "- ask（必须等待）：破坏性操作（删除历史）与关键歧义必须停下来等用户答复，\n"
+        "  不许自作主张替用户决定\n"
+    )
+
+
+def build_parallel() -> str:
+    """独立工具并行提示（P1-1 增补⑦，Claude Code 模式）。
+
+    注：当前执行器为单工具串行，此处只引导模型把无依赖的查询集中在同一轮表述，
+    为后续并行执行留接口。
+    """
+    return (
+        "# PARALLEL\n"
+        "多个互不依赖的查询（如同时要元数据和画面搜索）可在同一轮回答里依次\n"
+        "发出多个工具调用；有依赖的（先搜索再取帧）必须等上一个结果。\n"
+    )
+
+
+def build_intent_voice() -> str:
+    """调用前意图说明 + 工具名隐藏（P1-1 增补⑧，Cursor 模式）。"""
+    return (
+        "# INTENT_VOICE\n"
+        "- 每次调用工具前，先用一句中文向用户说明你要做什么（如\"我来找一下这段画面\"）\n"
+        "- 对用户描述用大白话（\"我来看看第 10 秒的画面\"），不要说出工具英文名\n"
+        "- 工具名只出现在调用语句里，不出现在面向用户的解释中\n"
+    )
+
+
 def build_tool_use(tool_descriptions: str) -> str:
     return (
         "# TOOL_USE\n"
@@ -74,15 +178,65 @@ def build_output() -> str:
     )
 
 
+def build_skills(active_skills: Optional[str] = None) -> str:
+    """用户 skills 注入段（P2-1，Progressive Disclosure 轻量版）。
+
+    active_skills 由调用方按 triggers 命中筛选后传入（name+description 摘要），
+    本函数只负责格式化；未命中时返回空串不占上下文。
+    """
+    if not active_skills:
+        return ""
+    return f"# SKILLS\n以下是与当前请求相关的用户工作流指引：\n{active_skills}\n"
+
+
+def match_skills(text: str, skills) -> Optional[str]:
+    """按 triggers 命中筛选 skills，返回注入摘要或 None。
+
+    skills 是 src.skills.loader.load_skills 的返回（tuple[Skill,...]）。
+    命中规则（大小写不敏感的子串匹配，双向）：
+      - 用户文本含任一 trigger，或 trigger 含在用户文本中
+    仅 enabled 的 skill 参与匹配。无命中或 skills 为空返回 None（不占上下文）。
+    纯函数，无副作用，可单测。
+    """
+    if not text or not skills:
+        return None
+    lower = text.lower()
+    hits: list[str] = []
+    for sk in skills:
+        if not sk.enabled or not sk.triggers:
+            continue
+        if any(t.lower() in lower or lower in t.lower() for t in sk.triggers if t):
+            hits.append(f"{len(hits) + 1}. {sk.name}: {sk.description}")
+    if not hits:
+        return None
+    return "\n".join(hits)
+
+
 def build_system_prompt(tool_descriptions: str = "",
                         context: Optional[str] = None,
+                        active_skills: Optional[str] = None,
                         include_tools: bool = True) -> str:
-    """组装完整 system prompt（模块化拼接，顺序即优先级）。"""
-    parts = [build_identity(), build_capabilities(), build_rules()]
+    """组装完整 system prompt（模块化拼接，顺序即优先级）。
+
+    v5.2 段顺序：IDENTITY → CAPABILITIES → AGENT_LOOP → THOUGHT → RULES →
+    CLARIFY_GATE → TOOL_USE → FAIL_SAFE → NOTIFY_ASK → PARALLEL →
+    INTENT_VOICE → CONTEXT → SKILLS → CITATION → OUTPUT。
+    新增段集中在中间，旧六模块位置不变，向后兼容（context/tool 参数不变）。
+    """
+    parts = [build_identity(), build_capabilities(), build_agent_loop(),
+             build_thought(), build_rules(), build_clarify_gate()]
     if include_tools and tool_descriptions:
         parts.append(build_tool_use(tool_descriptions))
+    parts.append(build_fail_safe())
+    parts.append(build_notify_ask())
+    parts.append(build_parallel())
+    parts.append(build_intent_voice())
     ctx = build_context(context)
     if ctx:
         parts.append(ctx)
+    skills = build_skills(active_skills)
+    if skills:
+        parts.append(skills)
+    parts.append(build_citation())
     parts.append(build_output())
     return "\n".join(parts)

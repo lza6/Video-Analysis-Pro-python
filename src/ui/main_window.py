@@ -1204,15 +1204,38 @@ class DesktopApp(QMainWindow):
         self.agent_panel.append_message("Agent", "", model_name=model)
 
         # P1-1: 模块化 system prompt（CL4R1T4S 六模块架构）
-        from src.core.agent_prompt import build_system_prompt
+        # P2-1: skills 触发注入（triggers 命中的用户工作流随 prompt 注入）
+        # P2-7: 用户偏好个性化（recall 命中的历史偏好注入 prompt）
+        from src.core.agent_prompt import build_system_prompt, match_skills
         tool_desc = self.tool_registry.get_tool_descriptions() if hasattr(self, 'tool_registry') else ""
+        active_skills = None
+        try:
+            from src.skills import load_skills
+            active_skills = match_skills(text, load_skills())
+        except Exception:
+            logging.debug("skills 触发匹配失败，跳过注入", exc_info=True)
+        recalled_prefs = None
+        try:
+            history_manager = getattr(self, 'history_manager', None)
+            if history_manager is not None:
+                prefs = history_manager.recall_preferences(text, top_k=3)
+                if prefs:
+                    recalled_prefs = "\n".join(
+                        f"- {p.get('content', '')}" for p in prefs if p.get('content'))
+        except Exception:
+            logging.debug("用户偏好召回失败，跳过注入", exc_info=True)
+        if recalled_prefs:
+            active_skills = (active_skills + "\n\n用户历史偏好：\n" + recalled_prefs) if active_skills else ("用户历史偏好：\n" + recalled_prefs)
         system_prompt = build_system_prompt(
             tool_descriptions=tool_desc,
             context=getattr(self, 'agent_system_context', None),
+            active_skills=active_skills,
         )
         full_prompt = text
         if system_prompt:
             full_prompt = system_prompt + "\n\nUser Question: " + text
+        if active_skills:
+            logging.info(f"🧩 注入个性化上下文（skills/偏好）{len(active_skills)} 字符")
 
         # Check if model supports vision. If not, don't send images.
         model_is_vision = False
@@ -2373,10 +2396,19 @@ class DesktopApp(QMainWindow):
         context_str += f"Recognized Transcript:\n{transcript_text}\n" if transcript_text else "No transcript available.\n"
         context_str += f"\nAI Analysis Report:\n{getattr(self, 'report_full_text', '')}\n"
         context_str += "--------------------\n"
-        
+
         logging.info("Injecting video context into Agent Panel...")
         self.agent_system_context = context_str
         self.agent_panel.inject_context(context_str)
+
+        # P2-7: 记录用户查询偏好（ADD-only 累积，失败静默——个性化是增强非依赖）
+        # 实际 recall 注入见 on_agent_query：build_system_prompt(active_skills=...)
+        try:
+            history_manager = getattr(self, 'history_manager', None)
+            if history_manager is not None and video_name != "Unknown Video":
+                history_manager.remember_preference("session", f"分析过视频 {video_name}")
+        except Exception:
+            logging.debug("记录用户偏好失败（不影响主流程）", exc_info=True)
 
     def export_pdf(self):
         if not self.output_dir:

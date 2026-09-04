@@ -185,9 +185,11 @@ class SkillsManagerTab(QWidget):
         # 刷新列表项显示
         row = self.list_widget.currentRow()
         if row >= 0:
-            status = "✅" if enabled else "⛔"
-            text = f"{status} {new_skill.name} — {_truncate(new_skill.description, DESC_TRUNC)}"
-            self.list_widget.item(row).setText(text)
+            item = self.list_widget.item(row)
+            if item is not None:
+                status = "✅" if enabled else "⛔"
+                text = f"{status} {new_skill.name} — {_truncate(new_skill.description, DESC_TRUNC)}"
+                item.setText(text)
 
     # ---- 导入 skill 文件夹 ----
     def _on_import(self) -> None:
