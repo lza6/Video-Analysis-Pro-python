@@ -265,9 +265,11 @@ class ChatWorker(QThread):
                         # P1-4 黑匣子透明化：
                         # ① eli5 一句大白话（替代 100 字符截断的摘要行）
                         # ② 决策日志条目 → DecisionLogPanel（entry_append 信号跨线程投递）
+                        #    args_json 传入真实工具参数（Critic 轮1 MAJOR-2：黑匣子须可见入参）
                         eli5_text = explain_tool_call(tool_name, args, result)
                         self.chunk_received.emit(f"✅ {eli5_text}\n")
                         try:
+                            import json as _json
                             entry = make_entry(
                                 step_name="Agent 工具调用",
                                 action_type=tool_name,
@@ -277,6 +279,7 @@ class ChatWorker(QThread):
                                 duration_ms=duration_ms,
                                 status="ok",
                                 risk="high" if tool_name == "delete_this_history" else "low",
+                                args_json=_json.dumps(args, ensure_ascii=False),
                             )
                             self.entry_append.emit(entry)
                         except Exception:
@@ -294,7 +297,22 @@ class ChatWorker(QThread):
                         continue
                         
                     except Exception as e:
+                        # Critic 轮1 MAJOR-1：工具异常分支也要写决策日志（黑匣子
+                        # 最该记录的就是失败调用）。status=error，reason=异常摘要。
                         self.chunk_received.emit(f"\n❌ 工具执行出错: {e}\n")
+                        try:
+                            err_entry = make_entry(
+                                step_name="Agent 工具调用",
+                                action_type=tool_name,
+                                decision=f"工具执行出错",
+                                reason=f"{tool_name} 抛出异常：{e}",
+                                status="error",
+                                risk="high",
+                            )
+                            self.entry_append.emit(err_entry)
+                        except Exception:
+                            logger_ = logging.getLogger(__name__)
+                            logger_.warning("[chat] 异常分支决策日志条目构造失败", exc_info=True)
                         break
                 
                 # No more tools, stop

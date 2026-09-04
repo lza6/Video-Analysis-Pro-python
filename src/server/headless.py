@@ -13,6 +13,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 
@@ -29,6 +30,12 @@ from src.core.logic import (VideoProcessor, AudioProcessor, VideoAnalyzer,
 logger = logging.getLogger("headless")
 
 TMP_ROOT = Path(tempfile.gettempdir()) / "vap_headless"
+
+# 全局分析信号量：串行化 run_analysis，防止并发请求各自重载 Whisper/Ollama
+# 导致 VRAM OOM 或 CPU 榨干（audit-prod P0-1）。上限可由 VAP_ANALYZE_CONCURRENCY 配置，
+# 默认 1（单 GPU 安全）；CPU 环境可调大但需配合显存互斥。
+_ANALYZE_SEMAPHORE = threading.Semaphore(
+    int(os.environ.get("VAP_ANALYZE_CONCURRENCY", "1")))
 
 
 def _capability_matrix() -> dict:
@@ -64,14 +71,29 @@ def _ollama_alive() -> bool:
 
 
 def run_analysis(video_bytes: bytes, filename: str, model: str = "qwen2.5:3b") -> dict:
-    """对上传的视频执行完整三阶段分析（LLM 走 Ollama；Ollama 不可用时仅返回结构化数据）。"""
+    """对上传的视频执行完整三阶段分析（LLM 走 Ollama；Ollama 不可用时仅返回结构化数据）。
+
+    串行化保护：本函数持全局信号量，防止并发请求各自重载 Whisper/Ollama 导致
+    VRAM OOM（audit-prod P0-1）。单 GPU 环境默认 VAP_ANALYZE_CONCURRENCY=1。
+    """
     TMP_ROOT.mkdir(parents=True, exist_ok=True)
     job_id = uuid.uuid4().hex[:12]
     workdir = TMP_ROOT / job_id
-    video_path = workdir / filename
+    # 安全消毒：filename 来自客户端 multipart，取 basename 防止 "..\\x.mp4" / "C:\\evil.mp4"
+    # 逃逸 workdir 写任意路径（commit 213cf57 声称已修但实际未落地，Critic 轮1 M3 补齐）。
+    safe_name = Path(filename).name or "upload.mp4"
+    # 扩展名白名单：只允许常见视频容器，防 .exe/.py 等可执行写入（audit-prod P0-3 收紧）
+    _ALLOWED_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".webm", ".wmv", ".ts"}
+    if Path(safe_name).suffix.lower() not in _ALLOWED_EXTS:
+        safe_name = "upload.mp4"
+    video_path = workdir / safe_name
     workdir.mkdir(parents=True, exist_ok=True)
     video_path.write_bytes(video_bytes)
 
+    # 串行化：拿不到信号量时立即返回 503，而非排队挂起（调用方可重试）。
+    if not _ANALYZE_SEMAPHORE.acquire(blocking=False):
+        shutil.rmtree(workdir, ignore_errors=True)
+        raise _ServerBusy("server busy, retry later")
     try:
         # Phase 1
         processor = VideoProcessor(video_path, workdir / "frames")
@@ -148,14 +170,26 @@ class Handler(BaseHTTPRequestHandler):
         环境变量 VAP_HEADLESS_TOKEN 为空 → 禁用鉴权（向后兼容）。
         非空 → 校验 Authorization: Bearer <token>，用 hmac.compare_digest
         防时序攻击。401 不打印收到的 token，仅记 "unauthorized: token mismatch"。
+
+        安全加固（Critic 轮1）：scheme 大小写不敏感（RFC 7235）；非 ASCII token
+        compare_digest 抛 TypeError → 兜底 401 不 500。
         """
         expected = os.environ.get("VAP_HEADLESS_TOKEN", "")
         if not expected:
             return True  # 未配置 token → 鉴权关闭
         auth = self.headers.get("Authorization", "")
-        got = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
-        # 防时序攻击：常量时间比较，不短路
-        if not hmac.compare_digest(got, expected):
+        got = ""
+        if auth:
+            # scheme 大小写不敏感："bearer x" / "BEARER x" 均接受
+            parts = auth.split(None, 1)
+            if len(parts) == 2 and parts[0].lower() == "bearer":
+                got = parts[1]
+        # 防时序攻击：常量时间比较，不短路；非 ASCII 兜底 401
+        try:
+            ok = hmac.compare_digest(got, expected)
+        except TypeError:
+            ok = False
+        if not ok:
             logger.warning("unauthorized: token mismatch")
             self._send_unauthorized()
             return False

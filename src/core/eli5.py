@@ -57,7 +57,7 @@ def explain_tool_call(tool_name: str, args: Dict, result: object) -> str:
         if tool_name == "point_and_jump":
             return _explain_point_jump(head)
         if tool_name == "delete_this_history":
-            return "删除这条历史记录（需要你确认）。"
+            return "删除这条历史记录（⚠️ 危险操作，后端会拦截等待你确认）。"
     except Exception as e:  # noqa: BLE001 — 摘要行绝不能崩，统一退化
         logger.debug("[eli5] %s 模板解析失败，退化通用文案: %s", tool_name, e)
 

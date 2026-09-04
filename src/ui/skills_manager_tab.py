@@ -84,6 +84,12 @@ class SkillsManagerTab(QWidget):
         bar.addWidget(self.btn_import)
         root.addLayout(bar)
 
+        # 状态行（Critic 轮1 MINOR-7：导入结果须对用户可见，不能只日志）
+        self.lbl_status = QLabel("")
+        self.lbl_status.setWordWrap(True)
+        self.lbl_status.setStyleSheet("color: gray; font-size: 11px;")
+        root.addWidget(self.lbl_status)
+
         # 主体：左右分栏
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.list_widget = QListWidget()
@@ -139,6 +145,13 @@ class SkillsManagerTab(QWidget):
         self.lbl_path.setText("—")
         self.chk_enabled.setEnabled(False)
         self.chk_enabled.setChecked(False)
+
+    # ---- 状态行 ----
+    def _set_status(self, text: str, *, error: bool = False) -> None:
+        """更新顶部状态行（导入成功/失败可见，Critic 轮1 MINOR-7）。"""
+        color = "#c62828" if error else "gray"
+        self.lbl_status.setText(text)
+        self.lbl_status.setStyleSheet(f"color: {color}; font-size: 11px;")
 
     # ---- 选中详情 ----
     def _on_select(self, row: int) -> None:
@@ -201,16 +214,23 @@ class SkillsManagerTab(QWidget):
         src_path = Path(src)
         skill_md = src_path / "SKILL.md"
         if not skill_md.exists():
-            logger.warning("导入失败：%s 下无 SKILL.md", src_path)
+            msg = f"导入失败：{src_path} 下无 SKILL.md"
+            logger.warning("%s", msg)
+            self._set_status(msg, error=True)
             return
         dest_dir = SKILLS_DIR / src_path.name
         if dest_dir.exists():
-            logger.warning("导入失败：目标已存在 %s", dest_dir)
+            msg = f"导入失败：目标已存在 {dest_dir}"
+            logger.warning("%s", msg)
+            self._set_status(msg, error=True)
             return
         try:
             SKILLS_DIR.mkdir(parents=True, exist_ok=True)
             shutil.copytree(src_path, dest_dir)
         except OSError as exc:
-            logger.error("拷贝 skill 失败：%s", exc)
+            msg = f"拷贝 skill 失败：{exc}"
+            logger.error("%s", msg)
+            self._set_status(msg, error=True)
             return
         self.reload()
+        self._set_status(f"已导入 skill：{src_path.name}")

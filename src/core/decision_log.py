@@ -52,6 +52,9 @@ class DecisionEntry:
     duration_ms: float = 0.0
     status: str = "ok"
     risk: str = "low"
+    # 工具调用的真实参数（JSON 串，Critic 轮1 MAJOR-2：黑匣子必须可见工具入参）。
+    # None 表示非工具调用步骤；空串 "" 表示无参工具。
+    args_json: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +107,7 @@ def make_entry(
     duration_ms: float = 0.0,
     status: str = "ok",
     risk: str = "low",
+    args_json: Optional[str] = None,
 ) -> DecisionEntry:
     """工厂构造 DecisionEntry。
 
@@ -129,4 +133,5 @@ def make_entry(
         duration_ms=duration_ms,
         status=status,
         risk=risk,
+        args_json=args_json,
     )

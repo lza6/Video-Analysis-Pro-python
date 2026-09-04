@@ -1,5 +1,25 @@
 # Changelog — Video Analysis Pro
 
+## [5.4.0] — 2026-09-04 · 官网前端诊断闭环 + spec-kit 审计工作流
+
+### 🌐 官网前端（website/）— 诊断报告全部 P0/P1 改进落地
+- **3D Hero → Canvas 2D 产品语义动画**：移除 three/@react-three/fiber/@react-three/drei 三依赖（-55 packages），改绘"检测框扫帧+时间码+命中光晕+时间轴指针"动画，与 AI 视频分析产品语义强相关，LCP 负担大降。
+- **App Router 容错位补齐**：新增 `error.tsx`（生产只露 digest 不泄漏 message）/`loading.tsx`（骨架屏）/`not-found.tsx`（自定义 404）。
+- **基元层**：`lib/utils.ts`(cn) + `ui/Container`(wide/default/narrow 三档) + `ui/Button`(primary/glass/chip 变体)。
+- **设计 token 落地**：oklch 字面量全量收敛进 `text-mute`/`text-accent`/`text-accent-2`/`accent-2-deep` 等 class，19+ 处散落字面量清零，改色一处生效。
+- **死抽象消除**：6 个 section 标题编排统一收敛进现成 `SectionHeading`（之前造了不用、各 section 手抄重复）。
+- **交互闭环**：Header 移动菜单补 Esc 关闭 + overlay 点外部关闭；`globals.css` 加 `scroll-padding-top: 5rem` 修锚点被 fixed 顶栏遮挡；Download 源码卡深链差异化；修 `Features.tsx` `glass-hover` 重复笔误。
+- `website/.gitignore` 补 `E2E实测结果/` 排除 Playwright 截图产物。
+
+### 🔬 spec-kit 审计工作流建立
+- `.spec/` 宪法 v1.0 + agent-skills ×10 安装，为 v5.4+ 专项审计提供 spec-driven-development 基建。
+
+### ✅ 验证（全部真实执行）
+- **website**：`tsc --noEmit` 0 错误 / `eslint` 0 / `next build` 6/6 静态页通过 / **Playwright E2E 8/8 PASS**（Hero canvas 渲染、锚点不遮挡、FAQ 手风琴、自定义 404、移动菜单 Esc+外部关闭、三断点 320/768/1440 截图）。
+- **主项目**：`pytest 102 passed`（含 e2e_full_pipeline 修复后）/ `py_compile` 全过 / `ruff` 0 错误。
+
+---
+
 ## [5.3.0] — 2026-09-04 · 接线收口与发布一致性
 
 ### 📝 发布一致性

@@ -3,7 +3,7 @@ import sys
 
 # Application Info
 APP_NAME = "Video Analysis Pro"
-APP_VERSION = "5.3.0"
+APP_VERSION = "5.4.0"
 
 # Environment
 VENV_SUBDIR_NAME = "venv"

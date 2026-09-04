@@ -185,10 +185,9 @@ class DecisionLogPanel(QWidget):
             f"步骤详情：{e.step_name} · {e.action_type} · {e.id}")
         self._fld_decision.setText(e.decision)
         self._fld_reason.setPlainText(e.reason)
-        # args 不在 DecisionEntry schema 内（schema 是 task 报告写的），
-        # 此处展示已有字段；如主控需展示工具参数，可扩展 entry 或单独传入。
-        self._fld_args.setPlainText(
-            f"step={e.step_name} action={e.action_type} risk={e.risk}")
+        # 真实工具参数（Critic 轮1 MAJOR-2：黑匣子必须可见工具入参）。
+        # args_json 由 ChatWorker 工具调用点传入；非工具步骤为 None。
+        self._fld_args.setPlainText(e.args_json or "(无参数)")
         self._fld_output.setText(e.output_path or "(无)")
         self._fld_duration.setText(f"{e.duration_ms:.1f}")
         self._fld_cause.setText(e.cause_id or "(根步骤)")
