@@ -24,6 +24,15 @@ import numpy as np
 logger = logging.getLogger("VideoAnalyzerCore")
 
 
+def _sanitize_rtsp_url(url: str) -> str:
+    """脱敏 RTSP URL 中的凭据（rtsp://user:pass@host → rtsp://user:***@host）。
+
+    T2 安全修复：RTSP URL 常内嵌摄像头密码，直接入日志会泄漏凭据。
+    """
+    import re
+    return re.sub(r"(://[^:/@]+:)[^@]+(@)", r"\g<1>***\g<2>", url)
+
+
 @dataclass
 class StreamEvent:
     """一次实时事件（运动/命中）。"""
@@ -50,7 +59,7 @@ class RtspFrameGrabber(threading.Thread):
         while not self._stop.is_set():
             cap = cv2.VideoCapture(self.rtsp_url)
             if not cap.isOpened():
-                logger.warning(f"RTSP 连接失败，{self.reconnect_delay}s 后重试: {self.rtsp_url}")
+                logger.warning(f"RTSP 连接失败，{self.reconnect_delay}s 后重试: {_sanitize_rtsp_url(self.rtsp_url)}")
                 self._stop.wait(self.reconnect_delay)
                 continue
             last = 0.0
@@ -169,7 +178,7 @@ class RtspMonitor:
     def start(self, fps: float = 1.0):
         self._grabber = RtspFrameGrabber(self.rtsp_url, self._on_frame, fps=fps)
         self._grabber.start()
-        logger.info(f"[RTSP] 监控启动: {self.rtsp_url}")
+        logger.info(f"[RTSP] 监控启动: {_sanitize_rtsp_url(self.rtsp_url)}")
 
     def stop(self):
         if self._grabber:

@@ -48,6 +48,35 @@ class ProtocolBackend:
             return None
         return base64.b64encode(p.read_bytes()).decode("utf-8")
 
+    def _post_with_retry(self, url: str, *, headers: Dict[str, str],
+                         payload: Dict[str, Any], max_retries: int = 3):
+        """带 429/5xx/网络错误指数退避的 POST（流式）。
+
+        生产必需：glm 等中转站限流常见（429），瞬断常见（10054）。
+        退避序列 2s/4s/8s；4xx（非429）不重试直接抛。
+        """
+        import time
+        last_exc: Optional[Exception] = None
+        for attempt in range(max_retries):
+            try:
+                resp = self._session.post(url, headers=headers, json=payload,
+                                          stream=True, timeout=self.timeout)
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    wait = 2 ** (attempt + 1)
+                    logger.warning(f"[gateway] HTTP {resp.status_code}, 退避 {wait}s 重试 "
+                                   f"({attempt + 1}/{max_retries})")
+                    resp.close()
+                    time.sleep(wait)
+                    continue
+                return resp
+            except (requests.ConnectionError, requests.Timeout) as e:
+                last_exc = e
+                wait = 2 ** (attempt + 1)
+                logger.warning(f"[gateway] 网络错误 {type(e).__name__}, 退避 {wait}s 重试 "
+                               f"({attempt + 1}/{max_retries})")
+                time.sleep(wait)
+        raise last_exc if last_exc else RuntimeError(f"[gateway] {max_retries} 次重试后仍失败")
+
     # ---- 子类实现 ----
     def chat_stream(self, messages: List[Dict[str, Any]],
                     image_paths: Optional[List[str]] = None,
@@ -106,9 +135,8 @@ class AnthropicBackend(ProtocolBackend):
             "content-type": "application/json",
         }
         try:
-            with self._session.post(f"{self.base_url}/messages",
-                                    headers=headers, json=payload, stream=True,
-                                    timeout=self.timeout) as resp:
+            with self._post_with_retry(f"{self.base_url}/messages",
+                                       headers=headers, payload=payload) as resp:
                 resp.raise_for_status()
                 for raw in resp.iter_lines(decode_unicode=True):
                     if not raw or not raw.startswith("data: "):
@@ -169,9 +197,8 @@ class OpenAIChatBackend(ProtocolBackend):
         headers = {"Authorization": f"Bearer {self.api_key}",
                    "Content-Type": "application/json"}
         try:
-            with self._session.post(f"{self.base_url}/chat/completions",
-                                    headers=headers, json=payload, stream=True,
-                                    timeout=self.timeout) as resp:
+            with self._post_with_retry(f"{self.base_url}/chat/completions",
+                                       headers=headers, payload=payload) as resp:
                 resp.raise_for_status()
                 for raw in resp.iter_lines(decode_unicode=True):
                     if not raw or not raw.startswith("data: "):
@@ -230,9 +257,8 @@ class OpenAIResponsesBackend(ProtocolBackend):
         headers = {"Authorization": f"Bearer {self.api_key}",
                    "Content-Type": "application/json"}
         try:
-            with self._session.post(f"{self.base_url}/responses",
-                                    headers=headers, json=payload, stream=True,
-                                    timeout=self.timeout) as resp:
+            with self._post_with_retry(f"{self.base_url}/responses",
+                                       headers=headers, payload=payload) as resp:
                 resp.raise_for_status()
                 for raw in resp.iter_lines(decode_unicode=True):
                     if not raw or not raw.startswith("data: "):
@@ -283,8 +309,7 @@ class GeminiBackend(ProtocolBackend):
         url = (f"{self.base_url}/v1beta/models/{self.model}:streamGenerateContent"
                f"?key={self.api_key}&alt=sse")
         try:
-            with self._session.post(url, json=payload, stream=True,
-                                    timeout=self.timeout) as resp:
+            with self._post_with_retry(url, headers={}, payload=payload) as resp:
                 resp.raise_for_status()
                 for raw in resp.iter_lines(decode_unicode=True):
                     if not raw or not raw.startswith("data: "):

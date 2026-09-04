@@ -332,6 +332,14 @@ class SurveillanceAgent:
             })
             logger.info(f"[{i+1}/{len(videos)}] {v.name}: {len(hits)} 命中")
 
+        # T4: 清理抽帧临时目录（保留 clips/ 与报告文件）。
+        # 历史 bug: 每个视频 600 帧×200KB≈120MB 残留磁盘。
+        import shutil
+        frames_root = odir / "frames"
+        if frames_root.exists():
+            shutil.rmtree(frames_root, ignore_errors=True)
+            logger.info(f"已清理临时抽帧目录: {frames_root}")
+
         # 生成报告
         report = SearchReport(
             query=f"查找携带「{self.item_description}」的人",

@@ -146,24 +146,33 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/analyze":
             return self._json(404, {"error": "not found"})
 
+        # T5 DoS 加固: 先校验 Content-Length 再读 body。
+        # 历史风险: 恶意客户端声明 10GB 并读入内存 → OOM。
+        max_mb = int(os.environ.get("VAP_MAX_UPLOAD_MB", "512"))
+        max_bytes = max_mb * 1024 * 1024
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            return self._json(400, {"error": "invalid Content-Length"})
+        if length <= 0:
+            return self._json(400, {"error": "empty upload"})
+        if length > max_bytes:
+            # 不读 body，直接拒绝并要求客户端中止
+            self.close_connection = True
+            return self._json(413, {"error": f"upload exceeds {max_mb} MB"})
+
         ctype = self.headers.get("Content-Type", "")
         if "multipart/form-data" not in ctype:
             # 简化: 也接受原始字节 + X-Filename 头
-            length = int(self.headers.get("Content-Length", 0))
             data = self.rfile.read(length)
             filename = self.headers.get("X-Filename", "upload.mp4")
         else:
             boundary = ctype.split("boundary=")[-1].encode()
-            length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length)
             data, filename = self._parse_multipart(body, boundary)
 
         if not data:
             return self._json(400, {"error": "empty upload"})
-
-        max_mb = int(os.environ.get("VAP_MAX_UPLOAD_MB", "512"))
-        if len(data) > max_mb * 1024 * 1024:
-            return self._json(413, {"error": f"upload exceeds {max_mb} MB"})
 
         try:
             result = run_analysis(data, filename)

@@ -37,3 +37,13 @@ class TestStreamEvent:
         ev = StreamEvent(timestamp=123.0, kind="motion", frame_path="a.jpg")
         assert ev.kind == "motion"
         assert ev.confidence == 0.0
+
+
+def test_sanitize_rtsp_url_hides_password():
+    """T2 安全回归：RTSP 凭据不入日志。"""
+    from src.core.rtsp_stream import _sanitize_rtsp_url
+    u = _sanitize_rtsp_url('rtsp://admin:SuperSecret@192.168.1.64:554/s')
+    assert 'SuperSecret' not in u
+    assert 'admin' in u and '***' in u
+    # 无凭据 URL 原样
+    assert _sanitize_rtsp_url('rtsp://192.168.1.64/s') == 'rtsp://192.168.1.64/s'

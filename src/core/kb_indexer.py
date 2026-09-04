@@ -6,6 +6,7 @@ Phase 1/2 完成后把关键帧写入 ChromaDB 全局 collection（kb_frames）�
 避免重复加载模型。
 """
 import logging
+import threading
 from typing import Optional
 
 import numpy as np
@@ -18,20 +19,27 @@ if CLIP_AVAILABLE:
 logger = logging.getLogger("VideoAnalyzerCore")
 
 _shared_embedder: Optional["SentenceTransformer"] = None
+_embedder_lock = threading.Lock()
 
 
 def get_embedder() -> Optional["SentenceTransformer"]:
-    """进程内共享一个 CLIP embedding 模型（首次调用时加载）。"""
+    """进程内共享一个 CLIP embedding 模型（首次调用时加载）。
+
+    T3 线程安全：Phase1 的 KBIndexWorker 与 Agent 面板的 visual_search
+    可并发首次调用，双重检查锁防止重复加载模型（加载 15s+，双份占 1GB+ 内存）。
+    """
     global _shared_embedder
     if not CLIP_AVAILABLE:
         return None
     if _shared_embedder is None:
-        try:
-            logger.info("KB indexer: loading clip-ViT-B-32 embedder...")
-            _shared_embedder = SentenceTransformer('clip-ViT-B-32')
-        except Exception as e:
-            logger.error(f"KB indexer: embedder load failed: {e}")
-            return None
+        with _embedder_lock:
+            if _shared_embedder is None:  # double-check under lock
+                try:
+                    logger.info("KB indexer: loading clip-ViT-B-32 embedder...")
+                    _shared_embedder = SentenceTransformer('clip-ViT-B-32')
+                except Exception as e:
+                    logger.error(f"KB indexer: embedder load failed: {e}")
+                    return None
     return _shared_embedder
 
 
