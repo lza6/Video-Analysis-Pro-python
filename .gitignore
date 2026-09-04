@@ -18,6 +18,8 @@ venv/
 # Runtime artifacts
 logs/
 cache/
+build/
+dist/
 crash_log.txt
 crash_debug.txt
 

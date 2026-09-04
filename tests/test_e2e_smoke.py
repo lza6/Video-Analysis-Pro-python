@@ -44,6 +44,21 @@ check("status_console", window.status_console is not None)
 check("vram_manager", window.vram_manager is not None)
 check("btn_start_disabled_no_video", not window.btn_start.isEnabled())
 
+# v5.1/v5.2 接线验证：监控/Skills/决策日志三个新 tab 已挂载
+_tab_texts = [window.tabs.tabText(i) for i in range(window.tabs.count())]
+check("surveillance_tab_present", any("监控" in t for t in _tab_texts))
+check("skills_tab_present", any("Skills" in t for t in _tab_texts))
+check("decision_log_tab_present", any("决策日志" in t for t in _tab_texts))
+check("tab_count_10", window.tabs.count() == 10)
+check("skills_tab_lists_builtin", window.tab_skills.list_widget.count() >= 1)
+
+# v5.2 agent_prompt 八段增补：关键段落出现在完整 system prompt 中
+from src.core.agent_prompt import build_system_prompt  # noqa: E402
+_sp = build_system_prompt(tool_descriptions="T", context="C")
+for _seg in ("AGENT_LOOP", "THOUGHT", "CLARIFY", "CITATION",
+             "FAIL_SAFE", "NOTIFY", "PARALLEL"):
+    check(f"prompt_has_{_seg}", _seg in _sp)
+
 # 模拟选择视频后的状态
 from pathlib import Path
 fake = Path("nonexistent_video_for_state_test.mp4")
@@ -83,4 +98,6 @@ def test_desktop_app_full_startup(qapp, tmp_path):
     assert child.returncode == 0, f"E2E 冒烟失败 (exit {child.returncode}):\n{tail}\nSTDERR:{stderr[-800:]}"
     assert "E2E_SUMMARY" in stdout
     result_section = stdout.split("E2E_RESULT:")[-1]
-    assert "FAIL" not in result_section.replace("E2E_SUMMARY", "")
+    # 逐行找 ": FAIL"（PASS 行内含 "FAIL_SAFE" 等段名，不能简单子串匹配）
+    fail_lines = [ln for ln in result_section.splitlines() if ln.strip().endswith(": FAIL")]
+    assert not fail_lines, f"E2E 检查项失败:\n" + "\n".join(fail_lines)

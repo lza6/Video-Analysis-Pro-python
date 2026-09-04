@@ -260,12 +260,12 @@ Video-Analysis-Pro/
 │   │   └── headless.py               # HTTP /analyze + /healthz
 │   └── 📂 utils/                     # 工具类
 │       ├── config_manager.py         # 配置+API Key 密钥环存储
-│       ├── constants.py              # 常量与版本(4.5.0)
+│       ├── constants.py              # 常量与版本(5.3.0)
 │       └── ui_components.py          # tkinter 安装向导
 ├── 📂 models/                        # 存放本地模型文件 (.pt, .gguf)
 ├── 📂 config/prompts/frame_analysis/ # 提示词模板 (video_summary/describe)
 ├── 📂 logs/                          # 运行日志
-├── 📂 tests/                         # v4.5 测试套件 (59 tests)
+├── 📂 tests/                         # 测试套件 (135 tests)
 ├── launcher.py                       # 🚀 主启动脚本 (版本门禁+venv)
 ├── debug_launcher.py                 # 调试启动脚本
 ├── requirements.txt                  # 核心依赖 (分层)
@@ -329,7 +329,10 @@ Video-Analysis-Pro/
 我们计划将 Video Analysis Pro 打造成**全能的本地多媒体大脑**。
 
 *   **v4.5 ✅ 已发布 (2026-09-03):** 跨视频向量知识库 (ChromaDB 全局 collection + 自然语言跨视频搜索 + Agent search_kb 工具)、可分发软件包 (PyInstaller onedir + 内置 FFmpeg)、Docker 部署 (CPU/CUDA + headless HTTP 服务)、跨平台入口 (Win/Linux/macOS)、API Key 密钥环存储 + 模型 SHA256 校验、全部 P0/P1 修复 + 59 个 E2E 测试。详见 `CHANGELOG.md`。
-*   **v5.0:** 引入语音克隆 (TTS)，让生成的总结报告可以 "读" 出来。
+*   **v5.1 ✅ 已发布 (2026-09-04):** 黑匣子透明化（eli5 大白话解释 + 决策日志面板）、监控分析/Skills/决策日志三 tab 挂载（7→10 tab）、headless Bearer Token 鉴权、Phase 3 摘要媒体链路恢复（seaborn 依赖修复）。
+*   **v5.2 ✅ 已发布 (2026-09-04):** Agent 提示词八段增补（对照 CL4R1T4S：Agent Loop/思考块/意图澄清/时间戳引用/失败求助/notify-ask/并行/意图前置）、skills 触发注入、用户偏好个性化。
+*   **v5.3 ✅ 已发布 (2026-09-04):** 发布一致性收口（APP_VERSION 对齐 tag、CHANGELOG 补 v5.1/v5.2、e2e_smoke 断言 14→28 项覆盖新 tab 与提示词段落）。
+*   **v5.4 计划:** 语音克隆 (TTS)，让生成的总结报告可以 "读" 出来。
 *   **长期目标:** 实现完全的插件化系统，让社区开发者可以上传自己的分析插件。
 
 ---
@@ -351,4 +354,4 @@ Video-Analysis-Pro/
 *(Project maintained by lza6)*
 
 ---
-*文档最后更新：2026-09-03 (v4.5.0)*
+*文档最后更新：2026-09-04 (v5.3.0)*
