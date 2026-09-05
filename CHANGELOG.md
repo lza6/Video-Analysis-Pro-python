@@ -1,5 +1,37 @@
 # Changelog — Video Analysis Pro
 
+## [8.0.0] — 2026-09-06 · PyQt6→Web UI 全量重构里程碑
+
+### 🎯 核心:桌面 PyQt6 → Web UI(FastAPI + Next.js)整体迁移
+
+用户决策"立即删除 PyQt6,只做 Web UI"。v8.0.0 完成不可逆迁移:
+- **后端** `src/web/`(FastAPI + uvicorn + sse-starlette):12 个 router
+  (health/analyze/jobs/SSE/metrics/media/models/agent/config/logs/
+  decisions/skills/batch/surveillance),复用 src/core 全部分析能力
+- **前端** `webapp/`(Next 16 + React 19 + Tailwind v4,静态导出):
+  11 个路由页面(analyze/gallery/media/metrics/agent/logs/batch/models/
+  surveillance/skills/decisions/settings),玻璃拟态设计系统
+- **启动**:双击 启动应用.bat → 浏览器自动打开 http://localhost:8000
+- **LLM**:NVIDIA 多 key 路由(.env VAP_NV_API_KEYS 11 keys)优先,
+  回退单 provider;config/test 走 router 探活(不真实付费 chat)
+- **删除**:src/ui/ 17 个 PyQt6 文件 + theme_compat + 6 个 PyQt6 测试
+
+### 改进项闭环
+- BatchRunner 信号从 pyqtSignal 改纯 Python _Signal(无 Qt 事件循环依赖)
+- 三阶段分析流水线 SSE 流式(phase/frame/transcript/report-token/done)
+- 凭据走 keyring(降级 ini + 告警),不回传明文 key
+- 模型下载 SHA256 校验 + SSE 进度
+- 路径消毒防遍历(resolve_within_root + 扩展名白名单)
+- IP 滑动窗口限流 + Bearer Token 鉴权(hmac 防时序)
+
+### 验证(已运行)
+- pytest 关键子集 97 passed
+- 13 项 E2E 全通(health/config/models/analyze+SSE/metrics/media/
+  agent/test_provider/decisions/skills/logs/runs/surveillance)
+- pyflakes 零告警;eslint 0 error;next build 13 路由静态导出
+
+---
+
 ## [7.0.0] — 2026-09-05 · v7.0 终极里程碑（skill 自动生成 + RTSP 实时流 + 多agent + 自检闭环完整落地）
 
 ### 🎯 核心：指南第四章 6 项展望全部闭环
