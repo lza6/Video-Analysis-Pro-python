@@ -482,6 +482,72 @@ class MotionDetector:
         return out
 
     # ------------------------------------------------------------------
+    # 工具（v6.0.1 修正：从 CrowdedSceneDetector 上移到 MotionDetector 父类，
+    # 父类 __init__ 调 self._find_ffmpeg()、detect() 调 self._probe_duration()，
+    # 之前这俩方法在子类导致父类实例 AttributeError。）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _find_ffmpeg() -> Optional[str]:
+        """定位 ffmpeg（优先 PATH，其次 imageio-ffmpeg 自带）。"""
+        found = shutil.which("ffmpeg")
+        if found:
+            return found
+        env_exe = os.environ.get("IMAGEIO_FFMPEG_EXE")
+        if env_exe and Path(env_exe).exists():
+            return env_exe
+        try:
+            import imageio_ffmpeg
+            return imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            return None
+
+    def _probe_duration(self, video: Path) -> float:
+        """读视频时长。优先 cv2，回退 ffprobe，最后 ffmpeg -i stderr 解析。
+
+        与 batch_runner._probe_duration 同款三级回退（监控 H.264 流 PPS 头
+        常让 cv2 读不到 frame count）。
+        """
+        try:
+            import cv2
+            cap = cv2.VideoCapture(str(video))
+            if cap.isOpened():
+                fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+                total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                cap.release()
+                if total and fps and total > 0 and fps > 0:
+                    return total / fps
+        except Exception as e:
+            logger.debug(f"[motion] cv2 读时长失败 {video.name}: {e}")
+        ffprobe = shutil.which("ffprobe")
+        if not ffprobe and self._ffmpeg:
+            cand = Path(self._ffmpeg).with_name("ffprobe.exe")
+            if cand.exists():
+                ffprobe = str(cand)
+        if ffprobe:
+            try:
+                cmd = [ffprobe, "-v", "error", "-show_entries",
+                       "format=duration", "-of",
+                       "default=noprint_wrappers=1:nokey=1", str(video)]
+                out = subprocess.run(cmd, capture_output=True, timeout=15)
+                txt = out.stdout.decode("utf-8", "ignore").strip()
+                if txt and float(txt) > 0:
+                    return float(txt)
+            except Exception:
+                pass
+        if self._ffmpeg:
+            try:
+                cmd = [self._ffmpeg, "-hide_banner", "-i", str(video)]
+                out = subprocess.run(cmd, capture_output=True, timeout=15)
+                err = out.stderr.decode("utf-8", "ignore")
+                m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", err)
+                if m:
+                    h, mi, s = m.group(1), m.group(2), m.group(3)
+                    return int(h) * 3600 + int(mi) * 60 + float(s)
+            except Exception:
+                pass
+        return 0.0
+
+    # ------------------------------------------------------------------
     # v5.9 I5.9-skills-1：crowded-scene YOLO 去重
     # ------------------------------------------------------------------
     def _detect_objects_yolo(self, frame_paths: List[str]) -> Optional[List[List[str]]]:
@@ -613,67 +679,3 @@ class CrowdedSceneDetector(MotionDetector):
         return super()._merge_to_segments(
             filtered_diff, filtered_ts, day_night,
             scene_boundaries, duration)
-
-    # ------------------------------------------------------------------
-    # 工具
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _find_ffmpeg() -> Optional[str]:
-        """定位 ffmpeg（优先 PATH，其次 imageio-ffmpeg 自带）。"""
-        found = shutil.which("ffmpeg")
-        if found:
-            return found
-        env_exe = os.environ.get("IMAGEIO_FFMPEG_EXE")
-        if env_exe and Path(env_exe).exists():
-            return env_exe
-        try:
-            import imageio_ffmpeg
-            return imageio_ffmpeg.get_ffmpeg_exe()
-        except Exception:
-            return None
-
-    def _probe_duration(self, video: Path) -> float:
-        """读视频时长。优先 cv2，回退 ffprobe，最后 ffmpeg -i stderr 解析。
-
-        与 batch_runner._probe_duration 同款三级回退（监控 H.264 流 PPS 头
-        常让 cv2 读不到 frame count）。
-        """
-        try:
-            import cv2
-            cap = cv2.VideoCapture(str(video))
-            if cap.isOpened():
-                fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-                total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-                cap.release()
-                if total and fps and total > 0 and fps > 0:
-                    return total / fps
-        except Exception as e:
-            logger.debug(f"[motion] cv2 读时长失败 {video.name}: {e}")
-        ffprobe = shutil.which("ffprobe")
-        if not ffprobe and self._ffmpeg:
-            cand = Path(self._ffmpeg).with_name("ffprobe.exe")
-            if cand.exists():
-                ffprobe = str(cand)
-        if ffprobe:
-            try:
-                cmd = [ffprobe, "-v", "error", "-show_entries",
-                       "format=duration", "-of",
-                       "default=noprint_wrappers=1:nokey=1", str(video)]
-                out = subprocess.run(cmd, capture_output=True, timeout=15)
-                txt = out.stdout.decode("utf-8", "ignore").strip()
-                if txt and float(txt) > 0:
-                    return float(txt)
-            except Exception:
-                pass
-        if self._ffmpeg:
-            try:
-                cmd = [self._ffmpeg, "-hide_banner", "-i", str(video)]
-                out = subprocess.run(cmd, capture_output=True, timeout=15)
-                err = out.stderr.decode("utf-8", "ignore")
-                m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", err)
-                if m:
-                    h, mi, s = m.group(1), m.group(2), m.group(3)
-                    return int(h) * 3600 + int(mi) * 60 + float(s)
-            except Exception:
-                pass
-        return 0.0

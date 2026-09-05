@@ -23,11 +23,14 @@ v6.0.0 主里程碑已闭环，本版补齐指南第十/十一章验证清单剩
 - `tests/test_motion_detector_crowded.py`：补 30% 量化断言
 - `src/ui/agent_dialog.py`：_conversation_history + get_conversation_history + 快捷指令按钮
 - `src/utils/constants.py`：APP_VERSION 6.0.0 → 6.0.1
+- `src/core/motion_detector.py`：**修复 v5.9 引入的回归 bug**——`_find_ffmpeg`/`_probe_duration` 误置于 CrowdedSceneDetector 子类，导致父类 MotionDetector 实例 `detect()` 调 `self._probe_duration()` 时 `AttributeError`（test_batch_runner 8 failed）。上移到 MotionDetector 父类，19 个 batch_runner 用例全绿。
+- `tests/test_batch_runner.py`：补 per-model/档位/回调 3 用例
 
 ### 🧪 验证
 - pyflakes：零告警（仅预存在 logic.py 的 unused import，非本次）。
-- 单测：v5.8+v5.9+v6.0 全套 = **98 passed**（含新增 40 agent_orchestrator + crowded 30% 量化）。
+- 单测：v5.8+v5.9+v6.0 全套 = **112 passed**（含新增 40 agent_orchestrator + crowded 30% 量化 + batch_runner 19 含原 8 failed 修复后全绿）。
 - 10.1 验证清单全部可勾 ✅。
+- 修复回归：test_batch_runner.py 从 8 failed → 19 passed（motion_detector 方法上移修复）。
 
 ### 📊 指南完整闭环（含本版收尾）
 《下一步改进指南.md》第十一/十二章 TODO 全部打勾，18 项改进 + 7.2 测试补齐 + 10.1/10.2 验证清单全部完成。
