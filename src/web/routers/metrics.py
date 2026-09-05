@@ -63,7 +63,6 @@ def generate_metrics(job_id: str, request: Request) -> dict:
                 cap = cv2.VideoCapture(rec.video_path)
                 if cap.isOpened():
                     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-                    fps = cap.get(cv2.CAP_PROP_FPS) or 0
                     n = min(50, max(1, total))
                     import numpy as np
                     for idx in np.linspace(0, max(0, total - 1), n, dtype=int) if total > 0 else []:

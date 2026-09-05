@@ -18,7 +18,10 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings, warn_on_weak_token
 from .deps import get_config_manager, get_job_store, web_jobs_root
-from .routers import agent, analyze, config, health, media, metrics, models
+from .routers import (
+    agent, analyze, batch, config, decisions,
+    health, logs, media, metrics, models, skills, surveillance,
+)
 from .routers.analyze import init_analyze_semaphore
 from .security import register_content_root
 from .services.analyzer_service import AnalyzerService
@@ -75,6 +78,10 @@ async def lifespan(app: FastAPI):
     # 注册内容根(frames 目录在 job 创建时动态注册,这里注册全局根)
     register_content_root("web_jobs", web_jobs_root())
 
+    # 安装日志桥:把 src.core logger 转发到 /api/logs 环形缓冲 + SSE
+    from .routers.logs import install_log_bridge
+    install_log_bridge()
+
     yield
 
     log.info("Video Analysis Pro Web 后端关闭")
@@ -107,6 +114,11 @@ def create_app() -> FastAPI:
     app.include_router(models.router)
     app.include_router(agent.router)
     app.include_router(config.router)
+    app.include_router(logs.router)
+    app.include_router(decisions.router)
+    app.include_router(skills.router)
+    app.include_router(batch.router)
+    app.include_router(surveillance.router)
 
     # 生产:挂载前端静态产物(若存在)
     _mount_frontend(app)
