@@ -29,8 +29,7 @@ def _probe(module: str) -> bool:
 
 SCENEDETECT_AVAILABLE = _probe("scenedetect")
 try:
-    from PIL import Image  # noqa: F401  (used by semantic dedup / KB indexer)
-    from sentence_transformers import SentenceTransformer, util  # noqa: F401
+    from sentence_transformers import util  # noqa: F401  (used by semantic_search / kb_indexer)
     CLIP_AVAILABLE = True
 except ImportError:
     CLIP_AVAILABLE = False
