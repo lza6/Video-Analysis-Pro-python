@@ -1,5 +1,40 @@
 # Changelog — Video Analysis Pro
 
+## [5.9.0] — 2026-09-05 · Agent 自主化 + skills 扩展 + UI 反馈（指南 v5.9 里程碑）
+
+### 🎯 核心：闭环《计划书/下一步改进指南.md》v5.9 全部改进项
+
+指南把 v6.0 路线第二里程碑定为 v5.9.0（agent 真正自主决策 + skills 扩展）。
+v5.9.0 一次性落地 4 项：夜间 skill 独立 + crowded-scene YOLO 去重 + 单视频汇总卡片 6 指标 + agent 触发批量进度实时反馈。
+
+### 改进项闭环
+
+| # | 改进项 | 改动 | 文件 |
+|---|------|------|------|
+| **I5.9-skills-2** | 夜间自适应 skill 独立 | 新建 `surveillance-night-adaptive/SKILL.md`（夜间/红外/低光照，night_threshold=3 更敏感）+ agent_prompt.match_skills 加夜间关键词（夜间/夜里/红外/低光/过夜）+ 优先级 密集>夜间>稀疏 | config/skills/, agent_prompt.py |
+| **I5.9-skills-1** | crowded-scene skill 落地（YOLO 去重） | `CrowdedSceneDetector(MotionDetector)` override `_merge_to_segments`：变化点密度>0.6 时用 YOLO 按物体类别聚类去重（过滤"人来回走动"重复变化）；无 ultralytics 降级纯帧差分 | motion_detector.py, crowded-scene/SKILL.md |
+| **I5.9-ui-1** | 单视频汇总卡片 6 指标 | `_build_summary_box` 补齐第 6 指标"命中率"（hits/segments_total×100%），命中率>0 金色高亮（#f39c12） | batch_tab.py |
+| **I5.9-ui-2** | agent 自动调用 UI 反馈 | batch_tab 加 `batch_progress_to_agent` 信号 + `_on_segment_done_to_agent` 槽（节流：非命中每5片投一次+命中立即投），main_window `_on_batch_progress_to_agent` 转 append_tool_call 投到 agent_dialog | batch_tab.py, main_window.py |
+
+### 🔧 改动文件
+- `config/skills/surveillance-night-adaptive/SKILL.md`（新）：夜间 skill 完整描述
+- `config/skills/surveillance-crowded-scene/SKILL.md`：补完整算法（去占位）
+- `src/core/motion_detector.py`：CrowdedSceneDetector + MotionConfig 加 crowded_density_threshold
+- `src/core/agent_prompt.py`：match_skills 加夜间关键词路由 + 优先级调整
+- `src/ui/batch_tab.py`：6 指标汇总卡 + batch_progress_to_agent 信号 + 节流槽
+- `src/ui/main_window.py`：_on_batch_progress_to_agent 投递到 agent_dialog
+- `tests/test_v59_skills_ui.py`（新）：夜间 skill 匹配 + 6 指标计算 4 单测
+- `tests/test_motion_detector_crowded.py`（新）：crowded 去重 + 降级 单测
+
+### 🧪 验证
+- pyflakes：所有改/新文件零告警。
+- 单测：v5.8+v5.9 全量 **104 passed**（含 v5.8 的 6 断点 + 8 记忆层 + 64 router + 5 frame_strip + 新增 v5.9 的 4 + crowded）。
+- E2E skill 匹配：`夜间监控找包`→night-adaptive，`商场人流分析`→crowded-scene，`走廊找包`→sparse-corridor，`商场夜间人流`→crowded（优先级正确）✅。
+- 6 指标计算：hits=1/total=2 → 命中率 50%，覆盖率 100%，API 调用 3，首字均 850ms ✅。
+
+### ⚠️ 降级铁律
+I5.9-skills-1 的 CrowdedSceneDetector 在无 ultralytics（CI 标准子集）时降级为纯帧差分（调父类 `_merge_to_segments`），不崩——降级路径已测。
+
 ## [5.8.1] — 2026-09-05 · 接通 7 个已实现未接通断点（B1–B7，指南 v6.0 路线）
 
 ### 🎯 核心：闭环《计划书/下一步改进指南.md》v5.8 全部断点

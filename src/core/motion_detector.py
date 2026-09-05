@@ -45,6 +45,10 @@ NVIDIA_MAX_SEGMENT_SEC = 120
 # 亮度阈值：灰度均值 > 此值判为昼，否则夜（经验值，监控室内外通用）
 DAY_NIGHT_BRIGHTNESS_THRESHOLD = 50
 
+# v5.9：帧文件名时间戳解析（CrowdedSceneDetector 按帧文件找 ts）
+import re as _re
+_TS_RE = _re.compile(r"f\d{6}_(\d+(?:\.\d+)?)\.jpg$", _re.IGNORECASE)
+
 
 # ----------------------------------------------------------------------
 # 数据结构
@@ -76,6 +80,10 @@ class MotionConfig:
     # detect() 的 finally 不删该目录，调用方拿到按时间序排列的帧文件用于拼长图证据。
     # 空时（旧调用/单测）：行为不变，临时目录用完即删（零回归）。
     frame_out_dir: Optional[str] = None
+    # v5.9 I5.9-skills-1：crowded-scene 密度阈值。变化点密度（变化帧数/总帧数）
+    # > 此值时启用 YOLO 物体类别聚类去重（过滤"人来回走动"的重复变化）。
+    # 默认 0.6 = 60% 帧有变化才判密集场景。CrowdedSceneDetector 用。
+    crowded_density_threshold: float = 0.6
 
 
 @dataclass
@@ -472,6 +480,139 @@ class MotionDetector:
                 change_points=seg.change_points if i == 0 else [],
             ))
         return out
+
+    # ------------------------------------------------------------------
+    # v5.9 I5.9-skills-1：crowded-scene YOLO 去重
+    # ------------------------------------------------------------------
+    def _detect_objects_yolo(self, frame_paths: List[str]) -> Optional[List[List[str]]]:
+        """用 YOLO 检测每帧物体类别列表。
+
+        返回每帧的物体类别集合（如 [['person'], ['person','backpack'], ...]）。
+        无 ultralytics / 推理失败返回 None（调用方据此降级纯帧差分）。
+        """
+        try:
+            from ultralytics import YOLO
+        except ImportError:
+            logger.debug("[motion] ultralytics 不可用，crowded 去重降级纯帧差分")
+            return None
+        try:
+            model = YOLO("yolov8n.pt")  # 最小模型，CPU 也能跑
+            results = model(frame_paths, verbose=False)
+            out: List[List[str]] = []
+            for r in results:
+                # r.boxes.data: tensor[N,6] (x1,y1,x2,y2,conf,cls)
+                classes = []
+                if hasattr(r, "boxes") and r.boxes is not None:
+                    try:
+                        cls_ids = r.boxes.cls.tolist()
+                        names = r.names  # {0:'person',1:'bicycle',...}
+                        for cid in cls_ids:
+                            classes.append(names.get(int(cid), str(cid)))
+                    except Exception:
+                        pass
+                out.append(sorted(set(classes)))
+            return out
+        except Exception as e:
+            logger.debug(f"[motion] YOLO 推理失败，降级纯帧差分: {e}")
+            return None
+
+    @staticmethod
+    def _object_set_unchanged(prev_set: List[str],
+                               curr_set: List[str]) -> bool:
+        """两帧物体类别集合是否相同（去重判定：物体集合不变 = 重复变化）。"""
+        return set(prev_set) == set(curr_set)
+
+
+class CrowdedSceneDetector(MotionDetector):
+    """人多密集场景监控检测器（v5.9 I5.9-skills-1）。
+
+    场景：商场/路口/车站，画面持续有人，纯帧差分会把"人来回走动"误判为无数
+    变化点，送 AI 的分片爆炸。解法：变化点密度（变化帧数/总帧数）超过
+    crowded_density_threshold（默认 0.6）时，用 YOLO 按物体类别聚类去重——
+    只保留"新物体类别出现"的变化点，过滤"同类物体来回走动"的重复变化。
+
+    无 ultralytics 时降级为父类纯帧差分（不崩，CI 标准子集无 ultralytics）。
+    """
+
+    def _merge_to_segments(
+        self,
+        diff_scores: List[float],
+        timestamps: List[float],
+        day_night: List[str],
+        scene_boundaries: List[float],
+        duration: float,
+    ) -> List[MotionSegment]:
+        """密集场景：密度高时 YOLO 物体去重，否则走父类逻辑。"""
+        cfg = self.config
+        # 收集变化帧时间戳（与父类同款逻辑）
+        change_ts: List[float] = []
+        for i, score in enumerate(diff_scores):
+            if i >= len(day_night):
+                break
+            label = day_night[i]
+            threshold = cfg.day_threshold if label == "day" else cfg.night_threshold
+            if score > threshold:
+                change_ts.append(timestamps[i])
+        change_ts.extend(scene_boundaries)
+        change_ts = sorted(set(change_ts))
+
+        # 密度判定：变化帧数 / 总帧数
+        density = (len(change_ts) / len(timestamps)) if timestamps else 0.0
+        if density <= cfg.crowded_density_threshold:
+            # 密度低：走父类纯帧差分合并（与 sparse-corridor 同款）
+            return super()._merge_to_segments(
+                diff_scores, timestamps, day_night,
+                scene_boundaries, duration)
+
+        # 密度高：YOLO 物体类别去重
+        # 复用已落盘的帧（frame_out_dir）做 YOLO 推理
+        frame_paths: List[str] = []
+        if self._frame_out_dir is not None:
+            for ts in change_ts:
+                # 帧文件名 f{i:06d}_{ts:.1f}.jpg，按 ts 找
+                for fp in self._frame_out_dir.glob("f*.jpg"):
+                    m = _TS_RE.match(fp.name)
+                    if m and abs(float(m.group(1)) - ts) < 0.5:
+                        frame_paths.append(str(fp))
+                        break
+
+        obj_sets = self._detect_objects_yolo(frame_paths) if frame_paths else None
+        if obj_sets is None:
+            # YOLO 不可用 → 降级父类纯帧差分
+            logger.info("[motion] crowded 场景但 YOLO 不可用，降级纯帧差分")
+            return super()._merge_to_segments(
+                diff_scores, timestamps, day_night,
+                scene_boundaries, duration)
+
+        # 物体去重：只在物体类别集合变化时保留变化点
+        deduped_ts: List[float] = []
+        prev_set: List[str] = []
+        for i, ts in enumerate(change_ts):
+            idx = min(i, len(obj_sets) - 1)
+            curr_set = obj_sets[idx] if idx < len(obj_sets) else []
+            if i == 0 or not self._object_set_unchanged(prev_set, curr_set):
+                deduped_ts.append(ts)
+            prev_set = curr_set
+        logger.info(
+            f"[motion] crowded 去重: {len(change_ts)} 变化点 → "
+            f"{len(deduped_ts)}（密度 {density:.2f}，YOLO 去重生效）")
+
+        # 用去重后的 change_ts 走父类合并（但父类会重新算 change_ts，
+        # 这里手动构造 segments 避免重复）
+        if not deduped_ts:
+            return []
+        # 复用父类 _merge_to_segments 的 padding/clamp 逻辑：构造一个
+        # 只含 deduped_ts 变化点的伪 diff_scores（超阈值的才保留）
+        deduped_set = set(deduped_ts)
+        filtered_diff = []
+        filtered_ts = []
+        for i, ts in enumerate(timestamps):
+            if ts in deduped_set and i < len(diff_scores):
+                filtered_diff.append(diff_scores[i])
+                filtered_ts.append(ts)
+        return super()._merge_to_segments(
+            filtered_diff, filtered_ts, day_night,
+            scene_boundaries, duration)
 
     # ------------------------------------------------------------------
     # 工具

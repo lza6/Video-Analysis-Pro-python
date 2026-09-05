@@ -1048,6 +1048,9 @@ class DesktopApp(QMainWindow):
             # v5.7：长图查看器跳转视频时间点 → 打开播放器定位（解决伪证据）
             self.tab_batch.strip_seek_requested.connect(
                 self._on_strip_seek_request)
+            # v5.9 I5.9-ui-2：批量进度投递到 agent 对话框
+            self.tab_batch.batch_progress_to_agent.connect(
+                self._on_batch_progress_to_agent)
         except Exception as e:
             logging.warning(f"[main_window] batch_tab 接入失败: {e}")
         # 模型管理 tab 作为工具项（愿景6：agent 帮下模型入口）
@@ -2300,6 +2303,26 @@ class DesktopApp(QMainWindow):
             create_summarize_hits_tool(context_provider),
             {}
         )
+
+    def _on_batch_progress_to_agent(self, video_name: str, seg_idx: int,
+                                     hits: int, match: bool, conf: float) -> None:
+        """v5.9 I5.9-ui-2：批量进度投到 agent 对话框。
+
+        用户在 agent 对话触发 batch_analyze 后，能看到实时进度而不必切到批量 tab。
+        接 batch_tab.batch_progress_to_agent 信号，转 append_tool_call。
+        """
+        try:
+            match_txt = "✅ 命中" if match else "—"
+            text = (
+                f"📊 {video_name} | 分片 {seg_idx + 1} | {match_txt} "
+                f"conf={conf:.2f} | 累计命中 {hits}"
+            )
+            self.agent_dialog.append_tool_call(
+                "batch_analyze",
+                {"video_name": video_name, "seg_idx": seg_idx},
+                text)
+        except Exception as e:
+            logging.debug(f"[main_window] 投递批量进度到 agent 失败: {e}")
 
     def _load_agent_session_memory(self) -> None:
         """v5.8 断点 B4：启动后读 run_store 历史 → 注入 agent 对话。

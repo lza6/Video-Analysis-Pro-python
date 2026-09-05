@@ -230,18 +230,27 @@ def match_skills(text: str, skills) -> Optional[str]:
             "走廊", "楼梯", "电梯厅", "楼道", "门厅",
             "监控", "surveillance", "cctv", "摄像头",
             "找包", "找人", "找物", "丢失", "被盗",
-            "空房间", "无人", "夜里", "过夜",
+            "空房间", "无人", "过夜",
         )
         crowded_keys = (
             "商场", "路口", "车站", "地铁", "机场",
             "人流", "人多", "密集", "拥挤", "density", "crowd",
         )
+        night_keys = (
+            "夜间", "夜里", "夜晚", "红外", "低光", "低光照",
+            "过夜", "夜间监控", "night", "infrared", "红外补光",
+        )
         is_sparse = any(k in lower for k in sparse_keys)
         is_crowded = any(k in lower for k in crowded_keys)
-        # 同时命中两类时，密集优先（商场里也有走廊，但密集场景算法更合适）
+        is_night = any(k in lower for k in night_keys)
+        # 同时命中多类时的优先级：密集 > 夜间 > 稀疏
+        # （商场里也有走廊，密集场景算法更合适；夜间密集仍走密集；
+        #   夜间稀疏走廊走夜间 skill 降阈值更敏感）
         target_name = None
         if is_crowded:
             target_name = "surveillance-crowded-scene"
+        elif is_night:
+            target_name = "surveillance-night-adaptive"
         elif is_sparse:
             target_name = "surveillance-sparse-corridor"
         if target_name:

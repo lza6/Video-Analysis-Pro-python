@@ -344,6 +344,8 @@ class BatchTab(QWidget):
         runner.run_started.connect(self._on_run_started)
         runner.video_started.connect(self._on_video_started)
         runner.segment_done.connect(self._on_segment_done)
+        # v5.9 I5.9-ui-2：分片进度同步投到 agent 对话框
+        runner.segment_done.connect(self._on_segment_done_to_agent)
         runner.video_done.connect(self._on_video_done)
         runner.batch_progress.connect(self._on_batch_progress)
         runner.batch_finished.connect(self._on_batch_finished)
@@ -643,9 +645,45 @@ class BatchTab(QWidget):
     # v5.7：帧长图查看器 → main_window 跳转视频时间点（解决伪证据）
     strip_seek_requested = pyqtSignal(str, float)  # video_path, timestamp_sec
 
+    # v5.9 I5.9-ui-2：批量进度投递到 agent 对话框（agent 触发后能看到进度）
+    batch_progress_to_agent = pyqtSignal(str, int, int, bool, float)
+    # (video_name, seg_idx, hits_so_far, match, confidence)
+
     def _on_strip_seek(self, video_path: str, ts: float) -> None:
         """转发长图查看器的跳转请求给 main_window（打开播放器定位到 ts）。"""
         self.strip_seek_requested.emit(video_path, ts)
+
+    def _on_segment_done_to_agent(self, run_id: str, seg_idx: int,
+                                   match: bool, conf: float) -> None:
+        """v5.9 I5.9-ui-2：分片判断完 → 投进度到 agent 对话框。
+
+        batch_runner.segment_done 信号接这里，每片结果转成文本投到
+        batch_progress_to_agent 信号，main_window 接后 append_tool_call 到
+        agent_dialog（用户在对话框看进度，不必切到批量 tab）。
+        节流：每 5 个分片投一次 + 命中时立即投（避免高频刷爆 UI）。
+        """
+        # 节流：非命中片每 5 片投一次，命中片立即投
+        self._seg_since_last_report = getattr(
+            self, "_seg_since_last_report", 0) + 1
+        if not match and self._seg_since_last_report < 5:
+            return
+        self._seg_since_last_report = 0
+        try:
+            run = self._run_store.get_run(run_id) if run_id else None
+            video_name = (run.get("video_name", "?") if run else "?")
+            hits = int(run.get("hits_count", 0)) if run else 0
+            total = int(run.get("segments_total", 0)) if run else 0
+            ok = int(run.get("segments_ok", 0)) if run else 0
+        except Exception:
+            video_name, hits, total, ok = "?", 0, 0, 0
+        match_txt = "✅ 命中" if match else "—"
+        # 进度文本（供日志/调试；实际投递只发结构化信号给 main_window 拼）
+        _progress = (
+            f"📊 {video_name} | 分片 {seg_idx+1}/{total}（已跑 {ok}）"
+            f" | {match_txt} conf={conf:.2f} | 累计命中 {hits}"
+        )
+        logger.debug(f"[batch] agent 进度: {_progress}")
+        self.batch_progress_to_agent.emit(video_name, seg_idx, hits, match, conf)
 
     def _agent_decide_segment(self, payload: dict) -> str:
         """v5.8 断点 B2：batch_runner 每轮介入回调 → agent 决策。
@@ -1025,11 +1063,13 @@ class _RunDetailDialog(QDialog):
             QMessageBox.warning(self, "打开失败", f"长图查看器错误: {e}")
 
     def _build_summary_box(self) -> QGroupBox:
-        """单视频汇总区：总耗时 / API 调用次数 / 平均首字耗时 / 命中数 / 覆盖率。
+        """单视频汇总区：总耗时 / API 调用次数 / 平均首字耗时 / 命中数 / 命中率 / 覆盖率。
 
-        覆盖率 = 命中分片数 / 分片总数 × 100%（命中片段覆盖了多少比例的分片）。
-        API 调用次数 = segments.attempts 之和（每片重试也算一次调用）。
-        平均首字耗时 = segments.first_token_ms 的均值（无则 "—"）。
+        v5.9 I5.9-ui-1：补齐 6 指标卡片（原 5 个 + 命中率）。
+        - 命中率 = hits_count / segments_total × 100%（命中分片占总分片比例）
+        - 覆盖率 = segments_ok / segments_total × 100%（已完成分片覆盖比例）
+        - API 调用次数 = segments.attempts 之和（每片重试也算一次调用）
+        - 平均首字耗时 = segments.first_token_ms 的均值（无则 "—"）
         """
         box = QGroupBox("单视频汇总")
         h = QHBoxLayout(box)
@@ -1047,18 +1087,25 @@ class _RunDetailDialog(QDialog):
         avg_ft = f"{sum(ftms_vals) / len(ftms_vals):.0f}ms" if ftms_vals else "—"
         hits = int(self._run.get("hits_count") or 0)
         seg_total = int(self._run.get("segments_total") or 0) or len(segs)
-        coverage = (hits / seg_total * 100) if seg_total > 0 else 0.0
+        seg_ok = int(self._run.get("segments_ok") or 0) or len(segs)
+        hit_rate = (hits / seg_total * 100) if seg_total > 0 else 0.0
+        coverage = (seg_ok / seg_total * 100) if seg_total > 0 else 0.0
         for label, val in (
             ("总耗时", total_elapsed_txt),
             ("API 调用次数", str(api_calls)),
             ("平均首字耗时", avg_ft),
             ("命中数", str(hits)),
+            ("命中率", f"{hit_rate:.1f}%"),
             ("覆盖率", f"{coverage:.1f}%"),
         ):
             col = QVBoxLayout()
             col.addWidget(QLabel(label))
             lbl_val = QLabel(val)
-            lbl_val.setStyleSheet("font-weight: bold; color: #2c3e50;")
+            # 命中率>0 用金色高亮（命中视频视觉强调）
+            if label == "命中率" and hit_rate > 0:
+                lbl_val.setStyleSheet("font-weight: bold; color: #f39c12;")
+            else:
+                lbl_val.setStyleSheet("font-weight: bold; color: #2c3e50;")
             col.addWidget(lbl_val)
             h.addLayout(col)
         h.addStretch(1)
