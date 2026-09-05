@@ -33,6 +33,20 @@ def _port_available(host: str, port: int) -> bool:
             return False
 
 
+def _find_available_port(host: str, preferred: int, max_tries: int = 20) -> int:
+    """从 preferred 起向上找可用端口(preferred..preferred+max_tries)。
+
+    都被占则返回 0(调用方报错退出)。本地工具场景 8000-8019 几乎不可能全占。
+    """
+    for offset in range(max_tries):
+        port = preferred + offset
+        if port > 65535:
+            break
+        if _port_available(host, port):
+            return port
+    return 0
+
+
 def _wait_and_open(host: str, port: int, timeout: float = 30.0) -> None:
     """轮询 /api/health 直到服务就绪,然后打开浏览器。
 
@@ -122,14 +136,21 @@ def run_server(host: str | None = None, port: int | None = None,
     from .config import get_settings
     settings = get_settings()
     host = host or os.environ.get("VAP_HOST") or settings.host
-    port = port or settings.port
+    port = port or int(os.environ.get("VAP_PORT") or 0) or settings.port
 
+    # 端口被占时自动找下一个可用端口(本地工具优先能跑起来,而非退出)。
+    # 只有命令行显式 --port 才算"用户强意图",环境变量 VAP_PORT 是默认配置
+    # 而非强意图,被占时允许自动跳(用户可在日志/浏览器看到实际端口)。
     if not _port_available(host, port):
-        log.error(
-            f"端口 {port} 已被占用。请关闭占用进程,或设置环境变量 "
-            f"VAP_PORT=<其他端口> 后重试。"
-        )
-        return 1
+        alt = _find_available_port(host, port)
+        if alt == 0:
+            log.error(
+                f"端口 {port}-{port+19} 全被占用,无法启动。请关闭占用进程或"
+                f"设置 VAP_PORT=<其他端口> 后重试。"
+            )
+            return 1
+        log.warning(f"端口 {port} 被占,自动改用 {alt}(浏览器将打开此端口)")
+        port = alt
 
     # 前端产物缺失时尝试自动构建(首次启动或产物被清时)
     from .app import FRONTEND_DIST
