@@ -101,6 +101,9 @@ class BatchConfig:
     max_tokens: int = 65536
     reasoning_budget: int = 8192
     clean_segments: bool = True  # 跑完删该视频分片临时目录（留 clip）
+    # v5.7.1：保留模式控制帧目录生命周期。auto=只留 strip.png 删 jpg；
+    # always=全留（jpg+png，便于 AI 重查任意时刻）；never=全删（最省盘，但长图也没了）。
+    keep_frames: str = "auto"
     resume: bool = True  # 断点续跑
     model: str = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
     enable_thinking: bool = True
@@ -365,6 +368,10 @@ class BatchRunner(QObject):
 
         全视频都生成（无变化视频零证据的核心修复；有变化视频也可核对 AI 判断）。
         拼接失败不阻断主流程（帧已落盘，长图可后补）。
+        v5.7.1：按 keep_frames 配置管理帧目录生命周期：
+          - auto（默认）：长图生成后删 jpg 只留 strip.png（省盘，长图可查）
+          - always：全留（jpg+png，便于 AI 重查任意时刻重新抽帧不重算）
+          - never：全删（最省盘，长图也删）
         """
         frame_dir = self._out_dir / "frames" / run_id
         strip_path = frame_dir / "strip.png"
@@ -372,8 +379,32 @@ class BatchRunner(QObject):
             out = FrameStripBuilder.build(frame_dir, strip_path)
             if out is not None:
                 self.run_store.update_run(run_id, strip_path=str(out))
+                self._prune_frames(frame_dir, strip_path, video)
         except Exception as e:
             logger.warning(f"[batch] 长图生成失败 {video.name}: {e}")
+
+    def _prune_frames(self, frame_dir: Path, strip_path: Path,
+                      video: Path) -> None:
+        """v5.7.1：按 keep_frames 配置裁剪帧目录。"""
+        mode = (self.config.keep_frames or "auto").lower()
+        if mode == "always":
+            return  # 全留
+        if mode == "never":
+            shutil.rmtree(frame_dir, ignore_errors=True)
+            logger.info(f"[batch] 清理帧目录（never）{frame_dir}")
+            return
+        # auto：长图存在 → 删 jpg 只留 strip.png
+        if not strip_path.exists():
+            return
+        removed = 0
+        for jpg in frame_dir.glob("f*.jpg"):
+            try:
+                jpg.unlink()
+                removed += 1
+            except Exception:
+                pass
+        logger.info(
+            f"[batch] 帧目录裁剪（auto）{video.name}: 删 {removed} jpg, 留 strip.png")
 
     # ------------------------------------------------------------------
     # 分片切分

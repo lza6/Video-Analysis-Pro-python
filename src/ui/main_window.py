@@ -2074,12 +2074,30 @@ class DesktopApp(QMainWindow):
         """v5.7：长图查看器 → 打开/复用播放器定位到 ts（解决伪证据）。
 
         用户在帧长图上点"询问 AI 这一帧" → 跳转到该时刻的播放器，可逐帧核对。
+        v5.7.1：同时把 AI 查询消息预填到 AgentDialog 输入框（不再只靠剪贴板）。
         """
         from pathlib import Path
         from src.ui.video_player_dialog import VideoPlayerDialog
         if not video_path or not Path(video_path).exists():
             self.append_log(f"长图跳转：视频不存在 {video_path}")
             return
+        # 预填 AI 查询消息到 AgentDialog 输入框（一键发送）
+        try:
+            mm = int(ts) // 60
+            ss = int(ts) % 60
+            msg = (f"在视频 {Path(video_path).name} 的 {mm:02d}:{ss:02d} 处"
+                   f"发生了什么？请描述画面内容。")
+            if hasattr(self, 'agent_dialog') and self.agent_dialog is not None:
+                # 切到 Agent 对话页（用户可能在批量监控工具页上）
+                self.agent_dialog.list_tools.setCurrentRow(0)
+                if hasattr(self.agent_dialog, 'input_msg'):
+                    self.agent_dialog.input_msg.setPlainText(msg)
+                    self.agent_dialog.input_msg.setFocus()
+                    self.agent_dialog.input_msg.moveCursor(
+                        __import__('PyQt6.QtGui',
+                                   fromlist=['QTextCursor']).QTextCursor.MoveOperation.End)
+        except Exception as e:
+            logging.debug(f"[main_window] 预填 agent 输入失败: {e}")
         # 复用已打开的播放器（同视频）或新开
         for widget in QApplication.topLevelWidgets():
             if (isinstance(widget, VideoPlayerDialog)

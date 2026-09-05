@@ -1,5 +1,26 @@
 # Changelog — Video Analysis Pro
 
+## [5.7.1] — 2026-09-05 · 剩余风险闭环（单帧命中 + 帧留存策略 + launcher 归一 + AI 预填）
+
+### 🎯 三个剩余风险全部闭环
+- **风险1：长图"选中帧"是占位** → 改为**真实点击命中**。`_ZoomableGraphicsView.mousePressEvent` 做 hit-test：scene 坐标 → `cell_rect` 公式反推行列 → 命中单帧发 `frame_clicked(idx, path, ts)` 信号。点哪帧就是哪帧，不再取中段占位。`cell_rect`/`compute_layout` 与 `FrameStripBuilder.build` 共用同一公式，hit-test 与绘制零漂移。
+- **风险2：有变化视频 frames/ 累积占盘** → 新增 `BatchConfig.keep_frames` 三档配置（`auto`=只留 strip.png 删 jpg 省盘 / `always`=全留便于 AI 重查 / `never`=全删最省盘）。`_build_filmstrip` 生成长图后调 `_prune_frames` 按配置裁剪。`batch_tab` UI 加下拉（"智能/全留/全删"），默认 `auto`（260MB/视频 → 留一张长图 ~6MB）。
+- **风险3：launcher.py 未提交** → 确认是 v5.6.0 前 `fix: 修复双击启动闪退` commit 09e23e2 的真实改动（logging 顺序 + StreamHandler→stdout + Python 软门禁位置），非 CRLF 幻影。本次随 v5.7.1 一并提交归一，不再游离。
+
+### 🔧 改动
+- **frame_strip.py**：抽 `compute_layout`/`cell_rect` 为公开函数，`build` 与查看器 hit-test 共用同一布局公式（零漂移）。
+- **frame_strip_dialog.py**：`_ZoomableGraphicsView` 加 `mousePressEvent` hit-test + `frame_clicked` 信号；`FrameStripDialog` 加 `_current_idx`/`_current_ts` 选中态；底部按钮组改为"查看原图 / 跳转视频 / 问AI"三连（都针对当前选中帧，非占位）；点击单帧自动弹原图弹窗（可缩放，复用同弹窗切换图不叠开）。
+- **batch_runner.py**：`BatchConfig.keep_frames` 字段 + `_prune_frames` 方法按 auto/always/never 裁剪帧目录。
+- **batch_tab.py**：UI 加"帧证据"下拉（3 档），`_collect_config` 收 `keep_frames`。
+- **main_window.py**：`_on_strip_seek_request` 同时预填 AI 查询消息到 `agent_dialog.input_msg`（一键发送，不再只靠剪贴板）+ 切到 Agent 对话页。
+- **launcher.py**：提交 v5.6.0 前遗留的真实改动（logging 顺序修复 + StreamHandler 显式 stdout + Python 软门禁位置）。
+- **constants.py**：5.7.0 → 5.7.1。
+
+### 🧪 验证
+- **pyflakes**：5 个改文件零告警。
+- **单测** `test_frame_strip`：4 passed（含新增 `compute_layout`/`cell_rect` 隐式覆盖）。
+- **回归** `test_agent_tools + test_core_pipeline`：17 passed。
+
 ## [5.7.0] — 2026-09-05 · 无变化视频帧长图证据（可缩放 + 时间戳 + AI 查询）
 
 ### 🎯 核心痛点修复：无变化视频零证据

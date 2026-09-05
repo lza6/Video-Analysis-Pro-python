@@ -176,6 +176,15 @@ class BatchTab(QWidget):
         self.chk_clean_segments = QCheckBox("分析完清理分片")
         self.chk_clean_segments.setChecked(False)
         row4.addWidget(self.chk_clean_segments)
+        row4.addSpacing(12)
+        # v5.7.1：帧证据留存策略（auto=只留长图删jpg省盘 / always=全留便于AI重查 / never=全删）
+        row4.addWidget(QLabel("帧证据:"))
+        self.combo_keep_frames = QComboBox()
+        self.combo_keep_frames.addItem("智能（留长图删帧，省盘）", "auto")
+        self.combo_keep_frames.addItem("全留（留长图+帧，可AI重查）", "always")
+        self.combo_keep_frames.addItem("全删（最省盘，无长图）", "never")
+        self.combo_keep_frames.setCurrentIndex(0)
+        row4.addWidget(self.combo_keep_frames)
         row4.addStretch(1)
         v.addLayout(row4)
 
@@ -325,6 +334,7 @@ class BatchTab(QWidget):
             "max_tokens": self.spin_max_tokens.value(),
             "reasoning_budget": self.spin_reasoning_budget.value(),
             "clean_segments": self.chk_clean_segments.isChecked(),
+            "keep_frames": self.combo_keep_frames.currentData() or "auto",
             # 画面变化阈值（百分比）。BatchRunner 用它做帧差过滤，避免静止画面送 VLM。
             "frame_change_pct": self.combo_frame_change.currentData() or _DEFAULT_FRAME_CHANGE_PCT,
         }

@@ -186,38 +186,41 @@ def cleanup_environment_and_config(configured_venv_path: str, reason: str = ""):
 _setup_master_root_instance = None
 
 if __name__ == "__main__":
-    # --- Python 版本门禁 ---
-    # paddlepaddle 等 AI 依赖在 3.13+ 没有预编译 wheel；历史行为是把依赖装到
-    # 任意系统 Python 上然后在运行中失败。这里在最早时刻拦截并给出可行动提示。
+    # 确保日志和配置目录存在
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    os.makedirs(LOG_DIR, exist_ok=True)
+
+    # 配置日志（必须在任何 logging.* 调用之前完成）
+    # 陷阱：若先调 logging.warning()/info()，logging 会用默认配置自动初始化
+    # (StreamHandler 写 stderr + 默认格式)，之后这里的 basicConfig 会被静默忽略，
+    # 导致 file_handler 永不生效(launcher.log 空文件)且日志走 stderr。
+    # 而 .bat 用 PowerShell `2>&1` 把 stderr 包装成 NativeCommandError 红色显示，
+    # 会让用户误以为启动失败。故：先 basicConfig，再用 logging。
+    # StreamHandler 显式用 sys.stdout，避免任何 stderr 输出被 PowerShell 误判。
+    log_file_path = os.path.join(LOG_DIR, "launcher.log")
+    file_handler = RotatingFileHandler(
+        log_file_path,
+        maxBytes=100 * 1024 * 1024,
+        backupCount=3,
+        encoding='utf-8'
+    )
+    stream_handler = logging.StreamHandler(sys.stdout)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s',
+        handlers=[file_handler, stream_handler]
+    )
+
     # --- Python 版本检查（软门禁）---
     # 历史行为：3.13+ 无 wheel 时硬退出。实测 2026 年主流依赖（PyQt6/torch/chromadb）
     # 在 3.14 已有 wheel 且现有 venv 工作正常 → 改为软警告：记录日志不阻断，
     # 仅在后续"安装依赖"失败时用户才知道需要降级。
     if not (3, 10) <= sys.version_info[:2] < (3, 13):
         logging.warning(
-            f"Python {sys.version_info.major}.{sys.version_info.minor} \n"
+            f"Python {sys.version_info.major}.{sys.version_info.minor} "
             f"非推荐版本 (推荐 3.10-3.12)。继续运行；若依赖安装失败请降级 Python。")
 
-    # 确保日志和配置目录存在
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    os.makedirs(LOG_DIR, exist_ok=True)
-
-    # 配置日志
-    log_file_path = os.path.join(LOG_DIR, "launcher.log")
-    file_handler = RotatingFileHandler(
-        log_file_path, 
-        maxBytes=100 * 1024 * 1024, 
-        backupCount=3, 
-        encoding='utf-8'
-    )
-    stream_handler = logging.StreamHandler()
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s',
-        handlers=[file_handler, stream_handler]
-    )
-    
     logging.info(f"--- {APP_NAME} 启动程序 ---")
     logging.info(f"初始Python: {INITIAL_SYS_EXECUTABLE}")
     logging.info(f"当前 sys.executable: {sys.executable}")

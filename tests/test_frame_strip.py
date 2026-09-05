@@ -78,6 +78,42 @@ def test_build_strip_time_order(tmp_path: Path) -> None:
     assert timestamps[0] == 0.0
 
 
+def test_cell_rect_layout_consistency(tmp_path: Path) -> None:
+    """cell_rect/compute_layout 与 build 的 paste 位置一致（hit-test 零漂移）。
+
+    造 25 帧 → build 长图 → cell_rect 计算每个帧矩形 → 断言网格尺寸匹配。
+    这是查看器 mousePressEvent hit-test 的数学基础。
+    """
+    from src.core.frame_strip import (
+        FrameStripBuilder, compute_layout, cell_rect,
+        _THUMB_W, _LABEL_H, _GAP, _COLS,
+    )
+    frame_dir = tmp_path / "frames" / "run_layout"
+    frame_dir.mkdir(parents=True)
+    for i in range(25):
+        _make_fake_frame(
+            frame_dir / f"f{i:06d}_{float(i):.1f}.jpg",
+            color=(i * 10 % 255, 0, 0),
+            ts_label=str(i),
+        )
+    out = FrameStripBuilder.build(frame_dir, frame_dir / "strip.png", cols=_COLS)
+    assert out is not None
+    # build 后从首帧读真实 thumb_h（build 按首帧比例算）
+    from PIL import Image
+    first = Image.open(frame_dir / "f000000_0.0.jpg")
+    thumb_h = int(first.size[1] * _THUMB_W / first.size[0])
+    first.close()
+    layout = compute_layout(25, _COLS, _THUMB_W, thumb_h)
+    assert layout["rows"] == 2  # ceil(25/20)=2
+    # cell_rect 与 layout 一致：第 0 帧左上角 = (gap, gap)
+    x0, y0, w0, h0 = cell_rect(0, 25, _COLS, _THUMB_W, thumb_h)
+    assert x0 == _GAP and y0 == _GAP and w0 == _THUMB_W and h0 == thumb_h
+    # 第 20 帧是第 2 行第 1 列
+    x20, y20, _, _ = cell_rect(20, 25, _COLS, _THUMB_W, thumb_h)
+    assert x20 == _GAP  # 第 2 行第 1 列 x = gap
+    assert y20 == _GAP + (thumb_h + _LABEL_H + _GAP)  # 第 2 行 y
+
+
 def test_fmt_mmss() -> None:
     """秒 → MM:SS 格式。"""
     from src.core.frame_strip import _fmt_mmss

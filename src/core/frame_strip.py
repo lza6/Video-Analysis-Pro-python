@@ -62,6 +62,38 @@ def _scan_frames(frame_dir: Path) -> List[Tuple[float, Path]]:
     return out
 
 
+def compute_layout(n: int, cols: int, thumb_w: int, thumb_h: int,
+                   label_h: int = _LABEL_H, gap: int = _GAP) -> dict:
+    """计算长图网格布局（供查看器 hit-test 单帧复用，与 build 保持一致）。
+
+    Returns:
+        {rows, cell_w, cell_h, canvas_w, canvas_h, gap}
+        cell_w/cell_h/canvas_w/canvas_h 含 gap 间距
+    """
+    rows = (n + cols - 1) // cols if n > 0 else 0
+    cell_w = thumb_w
+    cell_h = thumb_h + label_h
+    canvas_w = cols * cell_w + (cols + 1) * gap
+    canvas_h = rows * cell_h + (rows + 1) * gap
+    return {
+        "rows": rows, "cell_w": cell_w, "cell_h": cell_h,
+        "canvas_w": canvas_w, "canvas_h": canvas_h, "gap": gap,
+    }
+
+
+def cell_rect(idx: int, n: int, cols: int, thumb_w: int, thumb_h: int,
+              label_h: int = _LABEL_H, gap: int = _GAP) -> tuple:
+    """第 idx 帧在长图里的 (x, y, w, h) 像素矩形（左上角 + 宽高，含帧本身不含标签）。
+
+    供查看器 hit-test 单帧用，与 build 的 paste 位置完全一致。
+    """
+    layout = compute_layout(n, cols, thumb_w, thumb_h, label_h, gap)
+    r, c = divmod(idx, cols)
+    x = gap + c * (layout["cell_w"] + gap)
+    y = gap + r * (layout["cell_h"] + gap)
+    return (x, y, thumb_w, thumb_h)
+
+
 class FrameStripBuilder:
     """帧长图拼接器。纯静态方法，无状态。"""
 
@@ -98,13 +130,11 @@ class FrameStripBuilder:
             return None
         thumb_w = _THUMB_W
         thumb_h = max(1, int(orig_h * thumb_w / orig_w))
-        cell_w = thumb_w
-        cell_h = thumb_h + _LABEL_H
 
         n = len(frames)
-        rows = (n + cols - 1) // cols
-        canvas_w = cols * cell_w + (cols + 1) * _GAP
-        canvas_h = rows * cell_h + (rows + 1) * _GAP
+        layout = compute_layout(n, cols, thumb_w, thumb_h)
+        canvas_w = layout["canvas_w"]
+        canvas_h = layout["canvas_h"]
         canvas = Image.new("RGB", (canvas_w, canvas_h), _BG)
 
         # 字体：优先系统等线/微软雅黑，失败用 PIL 默认位图字体
@@ -122,8 +152,7 @@ class FrameStripBuilder:
 
         for i, (ts, fp) in enumerate(frames):
             r, c = divmod(i, cols)
-            x = _GAP + c * (cell_w + _GAP)
-            y = _GAP + r * (cell_h + _GAP)
+            x, y, _fw, _fh = cell_rect(i, n, cols, thumb_w, thumb_h)
             try:
                 img = Image.open(fp).convert("RGB")
                 img.thumbnail((thumb_w, thumb_h))
@@ -155,7 +184,7 @@ class FrameStripBuilder:
         canvas.save(str(out_path), "PNG")
         canvas.close()
         logger.info(
-            f"[strip] 长图已生成 {out_path}（{n} 帧，{cols}×{rows} 网格）")
+            f"[strip] 长图已生成 {out_path}（{n} 帧，{cols}×{layout['rows']} 网格）")
         return out_path
 
     @staticmethod
