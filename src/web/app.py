@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings, warn_on_weak_token
 from .deps import get_config_manager, get_job_store, web_jobs_root
-from .routers import analyze, health
+from .routers import agent, analyze, config, health, media, metrics, models
 from .routers.analyze import init_analyze_semaphore
 from .security import register_content_root
 from .services.analyzer_service import AnalyzerService
@@ -28,14 +29,39 @@ log = logging.getLogger("web.app")
 FRONTEND_DIST = Path(__file__).resolve().parents[2] / "webapp" / "out"
 
 
+def _load_dotenv() -> None:
+    """加载项目根 .env 到 os.environ(供 ProviderRouter 读多 key)。
+
+    不依赖 python-dotenv 第三方包:手动解析,与 load_from_env 的解析逻辑一致。
+    已存在的环境变量不覆盖(尊重用户显式设置)。
+    """
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.is_file():
+        return
+    try:
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            if k and k not in os.environ:
+                os.environ[k] = v
+    except Exception as e:
+        log.warning(f"加载 .env 失败: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """启动: 配置日志、初始化信号量、注入 AnalyzerService(持主 loop)。"""
+    """启动: 配置日志、加载 .env、初始化信号量、注入 AnalyzerService(持主 loop)。"""
     settings = get_settings()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s",
     )
+    # 加载 .env(供 ProviderRouter 的 load_from_env 读 VAP_NV_API_KEYS 多 key 路由)
+    _load_dotenv()
     warn_on_weak_token()
     log.info("Video Analysis Pro Web 后端启动")
 
@@ -76,6 +102,11 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(analyze.router)
+    app.include_router(metrics.router)
+    app.include_router(media.router)
+    app.include_router(models.router)
+    app.include_router(agent.router)
+    app.include_router(config.router)
 
     # 生产:挂载前端静态产物(若存在)
     _mount_frontend(app)

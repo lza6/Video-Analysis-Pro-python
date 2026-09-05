@@ -92,3 +92,107 @@ export interface DoneEvent {
   report_preview: string;
 }
 export interface ErrorEvent { message: string; }
+
+// ============================ models ============================
+
+export interface ModelCard {
+  id: string;
+  name: string;
+  desc: string;
+  size_hint: string;
+  exists: boolean;
+  path: string | null;
+  size_mb: number;
+  sha256_expected: boolean;
+}
+
+export interface ModelsResponse {
+  cards: ModelCard[];
+  local_models: { name: string; type: string }[];
+}
+
+export interface DownloadProgress { value: number; label: string; }
+export interface DownloadVerify { ok: boolean; msg?: string; }
+
+// ============================ config ============================
+
+export interface ProviderConfigOut {
+  client_type: number;
+  api_url: string;
+  model_name: string;
+  has_key: boolean;
+  keyring_available: boolean;
+  nvidia_keys: number;
+}
+
+export interface Preset {
+  name: string;
+  api_url: string;
+  model?: string;
+  notes?: string;
+}
+
+export interface PromptTemplate {
+  name: string;
+  content: string;
+}
+
+export interface TestResult {
+  ok: boolean;
+  models?: string[];
+  count?: number;
+  via?: string;
+  key_used?: string;
+  total_keys?: number;
+  error?: string;
+}
+
+// ============================ metrics / media ============================
+
+export interface MetricsResponse {
+  job_id: string;
+  avg: Record<string, number>;
+  series?: {
+    timestamps: number[];
+    brightness: number[];
+    saturation: number[];
+    sharpness: number[];
+  };
+  chart_url?: string | null;
+  generating?: boolean;
+}
+
+export interface MediaResponse {
+  job_id: string;
+  clips: string[];
+  summary_video: string | null;
+  gif: string | null;
+}
+
+// ============================ agent ============================
+
+export interface PlanStep {
+  step_id: string;
+  description: string;
+  tool?: string;
+  args?: Record<string, unknown>;
+}
+
+export interface AgentChatResponse {
+  intent: string;
+  skill_name?: string;
+  plan_steps?: PlanStep[];
+  reply: string;
+}
+
+export interface AgentRunStep {
+  description: string;
+  tool: string | null;
+  result: string | null;
+  status: string | null;
+}
+
+export interface AgentRunResponse {
+  done: boolean;
+  step: AgentRunStep | null;
+}

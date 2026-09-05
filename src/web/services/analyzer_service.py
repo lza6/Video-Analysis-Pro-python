@@ -16,9 +16,6 @@ import cv2
 from src.core.logic import (
     VideoProcessor,
     AudioProcessor,
-    VideoAnalyzer,
-    OllamaClient,
-    PromptLoader,
     Frame,
     videocapture_unicode,
 )
@@ -100,6 +97,7 @@ class AnalyzerService:
         frames_dir.mkdir(parents=True, exist_ok=True)
 
         rec = self._store.create(video_name, workdir, frames_dir)
+        rec.video_path = str(video_path)
 
         # 后台线程入口:在子线程里跑,通过 loop.call_soon_threadsafe 推 SSE 事件
         def push(event_type: str, data: dict):
@@ -129,6 +127,64 @@ class AnalyzerService:
         return rec
 
     # ------------------------------------------------------------------
+
+    def _build_llm_callback(self):
+        """构造 LLM 同步回调 (prompt) -> str,与 routers/agent.py 同优先级。
+
+        1. .env VAP_NV_API_KEYS → ProviderRouter 多 key 路由(nvidia)
+        2. LastUsed 单 provider → build_llm_client
+        """
+        try:
+            from src.core.provider_router import ProviderRouter, load_from_env, load_router_config_from_env
+            nv_keys = [k for k in load_from_env() if k.provider == "nvidia"]
+            if nv_keys:
+                router = ProviderRouter(nv_keys, **load_router_config_from_env())
+                from src.web.routers.agent import _nvidia_chat
+                return lambda prompt, images=None: _nvidia_chat(router, prompt, images)
+        except Exception as e:
+            log.info(f"nvidia router 不可用,回退单 provider: {e}")
+        try:
+            from src.core.logic import build_llm_client
+            client = build_llm_client(self._cm)
+            def cb(prompt, images=None):
+                chunks = []
+                for chunk in client.chat_stream(
+                    client.model if hasattr(client, "model") else "",
+                    prompt, images,
+                ):
+                    if chunk.startswith("__"):
+                        continue
+                    chunks.append(chunk)
+                return "".join(chunks)
+            return cb
+        except Exception as e:
+            log.info(f"LLM callback 不可用: {e}")
+            return None
+
+    def _build_analysis_prompt(self, frames, transcript, config) -> str:
+        """构造 VideoAnalyzer 等价的 prompt(帧信息 + 转录 + 用户提示)。
+
+        复用 PromptLoader 读 config/prompts/frame_analysis/video_summary.txt;
+        缺失则用代码默认。与 VideoAnalyzer.analyze_video 同一逻辑,但走 LLM
+        callback 而非 VideoAnalyzer(后者绑定 OllamaClient)。
+        """
+        from src.core.logic import PromptLoader
+        loader = PromptLoader()
+        template = config.get("custom_prompt") or loader.get_prompt("Video Summary") or (
+            "Analyze this video based on these keyframes: {frame_info}. "
+            "Audio: {audio_transcript}. User Request: {user_prompt}"
+        )
+        template = template + "\n\n请使用中文进行总结和回答。"
+        frame_info = "\n".join(
+            f"- {f.timestamp:.2f}s: 物体: N/A" + (f", metrics: {f.metrics}" if f.metrics else "")
+            for f in frames
+        )
+        transcript_text = transcript if isinstance(transcript, str) else (
+            getattr(transcript, "text", "") if transcript else "无音频"
+        )
+        return template.format(
+            user_prompt="", audio_transcript=transcript_text, frame_info=frame_info
+        )
 
     def _run_pipeline(
         self,
@@ -178,22 +234,16 @@ class AnalyzerService:
             push(SSEEvent.PHASE, {"phase": "analysis"})
             report = ""
             try:
-                client = OllamaClient()
-                analyzer = VideoAnalyzer(
-                    client,
-                    config["model"],
-                    PromptLoader(),
-                    use_yolo=config.get("enable_yolo", False),
-                    use_ocr=config.get("enable_ocr", False),
-                )
-                chunks: list[str] = []
-                for chunk in analyzer.analyze_video(frames, transcript, config.get("custom_prompt")):
-                    if chunk.startswith("__"):
-                        continue
-                    chunks.append(chunk)
-                    # 流式 token 直推前端
-                    push(SSEEvent.REPORT_TOKEN, {"token": chunk})
-                report = "".join(chunks)
+                llm_cb = self._build_llm_callback()
+                if llm_cb is None:
+                    raise RuntimeError("无可用 LLM(配 .env VAP_NV_API_KEYS 或 LastUsed provider)")
+                # VideoAnalyzer.analyze_video 已构造好 prompt;这里直接用 LLM cb
+                # 跑一次完整推理(非逐 token 流式,聚合后整段推)。
+                # 流式逐 token 需 VideoAnalyzer 接 stream=True,留作后续优化。
+                prompt = self._build_analysis_prompt(frames, transcript, config)
+                report = llm_cb(prompt) or ""
+                if report and not report.startswith("["):
+                    push(SSEEvent.REPORT_TOKEN, {"token": report})
             except Exception as e:
                 log.warning(f"LLM 阶段降级: {e}")
                 report = f"[LLM 阶段不可用: {e}]"

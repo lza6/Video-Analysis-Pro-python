@@ -30,6 +30,9 @@ const I = {
   metrics: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4.5 h-4.5"><path d="M3 3v18h18M8 15V8m5 7V5m5 10v-4"/></svg>
   ),
+  chat: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4.5 h-4.5"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" strokeLinejoin="round"/></svg>
+  ),
   logs: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4.5 h-4.5"><path d="M4 6h16M4 12h16M4 18h10" strokeLinecap="round"/></svg>
   ),
@@ -58,6 +61,7 @@ const NAV: NavItem[] = [
   { href: "/gallery/", label: "关键帧画廊", icon: I.gallery },
   { href: "/media/", label: "摘要媒体", icon: I.media },
   { href: "/metrics/", label: "元数据画质", icon: I.metrics },
+  { href: "/agent/", label: "Agent 对话", icon: I.chat },
   { href: "/logs/", label: "系统日志", icon: I.logs },
   { href: "/batch/", label: "批量处理", icon: I.batch },
   { href: "/models/", label: "模型管理", icon: I.models },

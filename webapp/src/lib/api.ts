@@ -42,14 +42,19 @@ export async function apiGet<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-export async function apiPostJson<T>(path: string, body: unknown): Promise<T> {
+export async function apiPostJson<T>(path: string, body: unknown, method: "POST" | "PUT" = "POST"): Promise<T> {
   const res = await fetch(apiUrl(path), {
-    method: "POST",
+    method,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw await parseError(res);
   return (await res.json()) as T;
+}
+
+/** PUT JSON(用于更新配置类端点)。 */
+export async function apiPutJson<T>(path: string, body: unknown): Promise<T> {
+  return apiPostJson<T>(path, body, "PUT");
 }
 
 /** POST multipart(config 字段为 JSON 字符串,与后端 Form(...) 对齐)。 */

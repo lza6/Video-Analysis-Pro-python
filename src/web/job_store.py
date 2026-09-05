@@ -34,6 +34,7 @@ class JobRecord:
     video_name: str
     workdir: Path
     frames_dir: Path
+    video_path: Optional[str] = None  # 原始视频绝对路径(metrics/media 回溯用)
     status: JobStatus = JobStatus.PENDING
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
@@ -46,6 +47,13 @@ class JobRecord:
     report: str = ""
     # 已提取帧的载荷列表(供 GET /api/jobs/{id}/frames 非流式查询)
     frames: list[dict] = field(default_factory=list)
+    # metrics 产物(get_advanced_video_metrics 的 avg + 图表 png 路径)
+    metrics_avg: dict = field(default_factory=dict)
+    metrics_chart_path: Optional[str] = None
+    # 摘要媒体产物(create_summary_media_artifacts)
+    media_clips: list[str] = field(default_factory=list)
+    media_summary_video: Optional[str] = None
+    media_gif: Optional[str] = None
     # SSE 事件队列:后台线程 push,SSE 端点 pull。无界,防丢事件。
     # 在 start_job 时用所属 loop 构造。
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=0))
