@@ -72,6 +72,10 @@ class MotionConfig:
     max_segment_sec: int = NVIDIA_MAX_SEGMENT_SEC
     max_frames: int = 14400
     brightness_threshold: int = DAY_NIGHT_BRIGHTNESS_THRESHOLD
+    # v5.7：帧持久化目录。非空时 _sample_frames 直接落盘到该目录（不落临时目录），
+    # detect() 的 finally 不删该目录，调用方拿到按时间序排列的帧文件用于拼长图证据。
+    # 空时（旧调用/单测）：行为不变，临时目录用完即删（零回归）。
+    frame_out_dir: Optional[str] = None
 
 
 @dataclass
@@ -115,6 +119,11 @@ class MotionDetector:
         self._ffmpeg = ffmpeg_exe or self._find_ffmpeg()
         if not self._ffmpeg:
             logger.warning("[motion] 未找到 ffmpeg，抽帧将失败")
+        # v5.7：帧持久化目录。非空时 _sample_frames 直接落盘到此处，
+        # detect() 的 finally 不删它（供 batch_runner 拼长图证据）。空时走旧路径。
+        self._frame_out_dir: Optional[Path] = (
+            Path(self.config.frame_out_dir) if self.config.frame_out_dir else None
+        )
 
     # ------------------------------------------------------------------
     # 主入口
@@ -144,10 +153,17 @@ class MotionDetector:
                 change_points=[],
             )]
 
-        # 1fps 抽帧到临时目录
-        tmp_dir = Path(tempfile.mkdtemp(prefix="motion_"))
+        # 1fps 抽帧——frame_out_dir 非空时落到持久目录（v5.7 长图证据），
+        # 否则落临时目录（旧路径，detect 返回前 rmtree 删）。
+        tmp_dir: Optional[Path] = None
+        if self._frame_out_dir is not None:
+            self._frame_out_dir.mkdir(parents=True, exist_ok=True)
+            frame_dir = self._frame_out_dir
+        else:
+            tmp_dir = Path(tempfile.mkdtemp(prefix="motion_"))
+            frame_dir = tmp_dir
         try:
-            frames = self._sample_frames(video_path, tmp_dir, duration)
+            frames = self._sample_frames(video_path, frame_dir, duration)
             if len(frames) < 2:
                 logger.info(f"[motion] {video_path.name} 抽帧不足 2 张，整段送 AI")
                 return [MotionSegment(
@@ -178,7 +194,9 @@ class MotionDetector:
                 f"（抽帧 {len(frames)} 帧，时长 {duration:.0f}s）")
             return segments
         finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+            # 只删临时目录；frame_out_dir（持久帧）留给调用方拼长图，不删。
+            if tmp_dir is not None:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def _cancel_quick_check(self, video_path: Path, duration: float) -> bool:
         """视频太短直接整段送 AI 不切（变化检测对 <30s 视频无意义）。"""
@@ -193,6 +211,9 @@ class MotionDetector:
 
         复用 surveillance_agent._extract_frames 的 ffmpeg fast seek 调用形状。
         每帧 -ss 单独 seek（监控流 seek 到任意点比 select 滤镜更鲁棒）。
+
+        v5.7：out_dir 若为持久 frame_out_dir（非临时），已存在的帧直接复用
+        （跳过重复抽帧，支持长图重建/断点续跑不重抽）。
         """
         out_dir.mkdir(parents=True, exist_ok=True)
         fps = self.config.sample_fps
@@ -207,6 +228,10 @@ class MotionDetector:
             if ts >= duration:
                 break
             fp = out_dir / f"f{i:06d}_{ts:.1f}.jpg"
+            # 持久目录下已存在的帧复用（断点续跑/重建长图不重抽，省 IO）
+            if fp.exists():
+                frames.append((ts, str(fp)))
+                continue
             cmd = [self._ffmpeg, "-y", "-ss", f"{ts:.3f}",
                    "-i", str(video), "-frames:v", "1",
                    "-q:v", "3", str(fp)]

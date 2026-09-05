@@ -573,6 +573,13 @@ class BatchTab(QWidget):
             success = args[1] if len(args) > 1 else 0
             failed = args[2] if len(args) > 2 else 0
             self._set_status(f"批量完成：共 {total}，成功 {success}，失败 {failed}")
+
+    # v5.7：帧长图查看器 → main_window 跳转视频时间点（解决伪证据）
+    strip_seek_requested = pyqtSignal(str, float)  # video_path, timestamp_sec
+
+    def _on_strip_seek(self, video_path: str, ts: float) -> None:
+        """转发长图查看器的跳转请求给 main_window（打开播放器定位到 ts）。"""
+        self.strip_seek_requested.emit(video_path, ts)
         self.btn_start.setEnabled(_BATCH_RUNNER_AVAILABLE)
         self.btn_resume.setEnabled(_BATCH_RUNNER_AVAILABLE)
         self.btn_cancel.setEnabled(False)
@@ -871,6 +878,59 @@ class _RunDetailDialog(QDialog):
         self.resize(640, 480)
         self._build_ui()
 
+    def _build_strip_bar(self) -> QHBoxLayout:
+        """v5.7：帧长图证据操作行。
+
+        无变化视频本来 0 命中零证据，长图让用户能核对算法是否漏判；
+        有变化视频也能核对 AI 判断真伪。strip_path 写在 runs 表（v5.7 新列）。
+        """
+        bar = QHBoxLayout()
+        bar.setSpacing(6)
+        strip_path = self._run.get("strip_path") or ""
+        if strip_path and Path(strip_path).exists():
+            lbl = QLabel("🖼 帧长图证据已生成")
+            lbl.setStyleSheet("color: #27ae60; font-weight: bold;")
+            bar.addWidget(lbl)
+            btn = QPushButton("🖼 查看帧长图（可缩放）")
+            btn.setStyleSheet(
+                "background: #2196F3; color: white; font-weight: bold; "
+                "padding: 4px 12px;"
+            )
+            btn.clicked.connect(self._on_view_strip)
+            bar.addWidget(btn)
+        else:
+            bar.addWidget(QLabel("🖼 帧长图证据：未生成（此 run 早于 v5.7 或生成失败）"))
+        bar.addStretch(1)
+        return bar
+
+    def _on_view_strip(self) -> None:
+        """打开帧长图查看器。"""
+        strip_path = self._run.get("strip_path") or ""
+        if not strip_path or not Path(strip_path).exists():
+            QMessageBox.information(self, "提示", "长图文件不存在")
+            return
+        try:
+            from src.ui.frame_strip_dialog import FrameStripDialog
+            video_path = self._run.get("video_path") or ""
+            frame_dir = str(Path(strip_path).parent)
+            dlg = FrameStripDialog(
+                strip_path=strip_path,
+                video_path=video_path,
+                frame_dir=frame_dir,
+                parent=self,
+            )
+            # 接线：长图查看器的 seek 信号 → 由 BatchTab 转发给 main_window
+            # （BatchTab 有 _on_strip_seek 槽转发给上层）
+            top = self.parent()
+            while top is not None and not isinstance(top, BatchTab):
+                top = top.parent()
+            if isinstance(top, BatchTab):
+                dlg.seek_video_requested.connect(top._on_strip_seek)
+            dlg.exec()
+        except Exception as e:
+            logger.warning(f"[batch_tab] 打开长图失败: {e}")
+            QMessageBox.warning(self, "打开失败", f"长图查看器错误: {e}")
+
     def _build_summary_box(self) -> QGroupBox:
         """单视频汇总区：总耗时 / API 调用次数 / 平均首字耗时 / 命中数 / 覆盖率。
 
@@ -919,6 +979,10 @@ class _RunDetailDialog(QDialog):
         # 覆盖率 = 命中数 / 分片总数 × 100%（命中分片占总分片比例）
         summary = self._build_summary_box()
         v.addWidget(summary)
+
+        # v5.7：帧长图证据按钮（无变化视频零证据的核心修复）
+        strip_bar = self._build_strip_bar()
+        v.addLayout(strip_bar)
 
         # 顶部元信息
         meta = QHBoxLayout()

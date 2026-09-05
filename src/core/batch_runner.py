@@ -49,6 +49,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 # （与 surveillance_agent.py 顶部 import torch 不同——batch_runner 只在切分片
 # 时按需 import cv2 读元数据，不强制全局 torch）。
 from src.core.motion_detector import MotionConfig, MotionDetector
+from src.core.frame_strip import FrameStripBuilder
 
 logger = logging.getLogger("VideoAnalyzerCore")
 
@@ -172,6 +173,7 @@ class BatchRunner(QObject):
         # M1：变化检测器配置（昼夜自适应 + context padding）
         # 复用 BatchConfig 的 clip_padding 作为 MotionConfig.context_padding，
         # 保持两个 padding 语义一致（命中裁剪余量 = 变化时段上下文余量）。
+        # v5.7：frame_out_dir 在 _segment_video 按视频填（run_id 按视频不同）。
         self._motion_config = MotionConfig(
             sample_fps=config.fps_sample,
             context_padding=config.clip_padding,
@@ -264,12 +266,17 @@ class BatchRunner(QObject):
         self.run_started.emit(run_id, video.name)
         self.video_started.emit(run_id, video.name)
 
-        # 切分片（M1：基于变化检测，无变化时段返回 0 片段）
+        # 切分片（M1：基于变化检测，无变化时段返回 0 片段；帧同步落盘 frames/<run_id>/）
         seg_paths, seg_starts, seg_durs = self._segment_video(video, run_id, duration)
         n_segs = len(seg_paths)
         self.run_store.update_run(
             run_id, segments_total=n_segs, status="running")
         logger.info(f"[batch] {video.name} 切成 {n_segs} 片")
+
+        # v5.7：全视频生成长图证据（无变化视频零证据的核心修复）
+        # 无变化视频本来 0 命中零证据，长图让用户能核对算法是否漏判；
+        # 有变化视频也生成长图，用户可核对 AI 判断真伪。帧已落盘，拼接毫秒级。
+        self._build_filmstrip(run_id, video)
 
         # M1：无变化时段 → 0 片段，直接标 done 跳过 AI（省调用）
         if n_segs == 0:
@@ -344,7 +351,7 @@ class BatchRunner(QObject):
             hits_count=self._count_existing_hits(run_id))
         self.video_done.emit(run_id, video.name, hits)
 
-        # 内存回收：清该视频分片临时目录
+        # 内存回收：清该视频分片临时目录（v5.7：只清 segments/，frames/ 保留作长图证据）
         if self.config.clean_segments:
             seg_dir = self._out_dir / "segments" / run_id
             if seg_dir.exists():
@@ -352,6 +359,21 @@ class BatchRunner(QObject):
                 logger.info(f"[batch] 清理分片目录 {seg_dir}")
         self._gc_collect()
         return hits
+
+    def _build_filmstrip(self, run_id: str, video: Path) -> None:
+        """v5.7：把 frames/<run_id>/ 落盘帧拼成长图，写 run_store.strip_path。
+
+        全视频都生成（无变化视频零证据的核心修复；有变化视频也可核对 AI 判断）。
+        拼接失败不阻断主流程（帧已落盘，长图可后补）。
+        """
+        frame_dir = self._out_dir / "frames" / run_id
+        strip_path = frame_dir / "strip.png"
+        try:
+            out = FrameStripBuilder.build(frame_dir, strip_path)
+            if out is not None:
+                self.run_store.update_run(run_id, strip_path=str(out))
+        except Exception as e:
+            logger.warning(f"[batch] 长图生成失败 {video.name}: {e}")
 
     # ------------------------------------------------------------------
     # 分片切分
@@ -364,17 +386,30 @@ class BatchRunner(QObject):
         出现"的变化时段，只对这些时段加 padding 后切 mp4。长时间无变化的
         空走廊直接跳过（不切、不送 AI），省 90%+ AI 调用。
 
+        v5.7：帧落盘到 frames/<run_id>/（motion_detector 持久 frame_out_dir），
+        detect 返回后帧不删；调方在 _run_single_video 里据此生成长图证据。
+
         Returns:
             (seg_paths, seg_starts, seg_durs)
         """
         seg_dir = self._out_dir / "segments" / run_id
         seg_dir.mkdir(parents=True, exist_ok=True)
 
-        # 找变化时段
-        detector = MotionDetector(self._motion_config, ffmpeg_exe=self._ffmpeg)
+        # v5.7：每视频独立 frame_out_dir（run_id 按视频不同），让抽帧落盘
+        # 到 frames/<run_id>/，detect 返回后帧不删，供长图证据拼接。
+        frame_out_dir = self._out_dir / "frames" / run_id
+        motion_config = MotionConfig(
+            sample_fps=self._motion_config.sample_fps,
+            context_padding=self._motion_config.context_padding,
+            max_segment_sec=self._motion_config.max_segment_sec,
+            day_threshold=self._motion_config.day_threshold,
+            night_threshold=self._motion_config.night_threshold,
+            frame_out_dir=str(frame_out_dir),
+        )
+        detector = MotionDetector(motion_config, ffmpeg_exe=self._ffmpeg)
         segments = detector.detect(video)
 
-        # 无变化时段 → 0 片段（直接标 done，跳过 AI）
+        # 无变化时段 → 0 片段（直接标 done，跳过 AI，帧+长图由调用方处理）
         if not segments:
             logger.info(f"[batch] {video.name} 无画面变化时段，跳过 AI（0 片段）")
             return [], [], []

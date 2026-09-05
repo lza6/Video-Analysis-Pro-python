@@ -1036,6 +1036,9 @@ class DesktopApp(QMainWindow):
                                       run_store=RunStore())
             self.agent_dialog.add_tool_page(
                 "🎞", "批量监控", self.tab_batch, "batch")
+            # v5.7：长图查看器跳转视频时间点 → 打开播放器定位（解决伪证据）
+            self.tab_batch.strip_seek_requested.connect(
+                self._on_strip_seek_request)
         except Exception as e:
             logging.warning(f"[main_window] batch_tab 接入失败: {e}")
         # 模型管理 tab 作为工具项（愿景6：agent 帮下模型入口）
@@ -2066,6 +2069,36 @@ class DesktopApp(QMainWindow):
 
         # Otherwise log it (main window has no persistent preview to seek)
         self.append_log(f"Agent 已定位到关键时刻: {ts:.1f}s")
+
+    def _on_strip_seek_request(self, video_path: str, ts: float) -> None:
+        """v5.7：长图查看器 → 打开/复用播放器定位到 ts（解决伪证据）。
+
+        用户在帧长图上点"询问 AI 这一帧" → 跳转到该时刻的播放器，可逐帧核对。
+        """
+        from pathlib import Path
+        from src.ui.video_player_dialog import VideoPlayerDialog
+        if not video_path or not Path(video_path).exists():
+            self.append_log(f"长图跳转：视频不存在 {video_path}")
+            return
+        # 复用已打开的播放器（同视频）或新开
+        for widget in QApplication.topLevelWidgets():
+            if (isinstance(widget, VideoPlayerDialog)
+                    and getattr(widget, '_video_path', None) == video_path):
+                widget.media_player.setPosition(int(ts * 1000))
+                widget.raise_()
+                widget.activateWindow()
+                return
+        # 新开播放器（main_window 无 frames/transcript 上下文，播放器仍可用）
+        try:
+            dlg = VideoPlayerDialog(Path(video_path), self, frames=[])
+            # 标记 _video_path 供后续复用定位
+            dlg._video_path = video_path  # type: ignore[attr-defined]
+            dlg.show()
+            # 定位到 ts（show 后 setPosition 才生效）
+            dlg.media_player.setPosition(int(ts * 1000))
+        except Exception as e:
+            logging.warning(f"[main_window] 长图跳转播放器失败: {e}")
+            self.append_log(f"长图跳转失败: {e}")
 
     def append_log(self, msg):
         # Safeguard: prevent crash if logging happens before UI is ready

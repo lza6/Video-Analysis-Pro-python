@@ -86,9 +86,12 @@ class RunStore:
                     total_elapsed_sec  REAL,
                     model              TEXT,
                     provider           TEXT,
-                    mode               TEXT
+                    mode               TEXT,
+                    strip_path         TEXT
                 )
             """)
+            # v5.7：旧库补 strip_path 列（长图证据路径）
+            self._ensure_column(conn, "runs", "strip_path", "TEXT")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS segments (
                     seg_id        TEXT PRIMARY KEY,
@@ -225,7 +228,7 @@ class RunStore:
             "video_path", "video_name", "duration_sec", "status",
             "started_at", "finished_at", "hits_count", "segments_total",
             "segments_ok", "segments_failed", "vlm_elapsed_sec",
-            "total_elapsed_sec", "model", "provider", "mode",
+            "total_elapsed_sec", "model", "provider", "mode", "strip_path",
         }
         if "status" in fields and fields["status"] not in _RUN_STATUS_VALUES:
             raise ValueError(

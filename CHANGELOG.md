@@ -1,5 +1,26 @@
 # Changelog — Video Analysis Pro
 
+## [5.7.0] — 2026-09-05 · 无变化视频帧长图证据（可缩放 + 时间戳 + AI 查询）
+
+### 🎯 核心痛点修复：无变化视频零证据
+- **问题**：监控批量分析里 motion_detector 判定"无变化"的视频直接跳过 AI，用户拿到 0 命中但看不到任何画面，无法核对算法是否漏判、无法定位"这一刻到底有没有人经过"——伪证据盲区。
+- **修复**：全视频（无变化+有变化+命中）都把 1fps 抽帧落盘到 `frames/<run_id>/`，拼成带 `MM:SS` 时间戳标注的长图 `frames/<run_id>/strip.png`，20 张/行横向铺满换行，可滚轮缩放 + 拖动平移 + 单帧原图查看 + 跳转播放器定位。
+
+### 🔧 改动（4 文件改 + 2 文件新增）
+- **motion_detector.py**：`MotionConfig` 加 `frame_out_dir` 字段；`_sample_frames` 落盘到持久目录（已存在帧复用，支持重建/断点续跑不重抽）；`detect()` 的 finally 只删临时目录，不删 `frame_out_dir`（零回归：空配置走旧临时目录路径）。
+- **batch_runner.py**：`_segment_video` 每视频建 `frames/<run_id>/` 帧目录传 detector；新增 `_build_filmstrip()` 在切分片后、无变化早退前调 `FrameStripBuilder` 生成长图并写 `run_store.strip_path`；`clean_segments` 只清 `segments/`，`frames/` 保留作证据。
+- **run_store.py**：`runs` 表加 `strip_path TEXT` 列（`_ensure_column` 探测旧库自动 ALTER TABLE 补齐）；`update_run` 白名单加 `strip_path`。
+- **新增 frame_strip.py**（~140 行）：纯 Pillow 拼接器，`FrameStripBuilder.build(frame_dir, out_path, cols=20)` 扫帧 → 缩略 160px → 底部画 `MM:SS` 黑底白字 → 20 列网格 PNG；`list_frames(frame_dir)` 供查看器/AI 查询用。零 AI 调用，毫秒级。
+- **新增 frame_strip_dialog.py**（~190 行）：`FrameStripDialog` 用 `QGraphicsView + QGraphicsPixmapItem` 展示长图，滚轮缩放（10%–800%）+ `ScrollHandDrag` 拖动 + "适合窗口"重置 + "询问 AI 这一帧"（时间点复制剪贴板 + 跳转播放器）+ "打开帧目录"。
+- **batch_tab.py**：`_RunDetailDialog` 加"🖼 查看帧长图（可缩放）"按钮（读 `run["strip_path"]`）；新增 `strip_seek_requested` 信号 + `_on_strip_seek` 槽转发跳转。
+- **main_window.py**：`_on_strip_seek_request(video_path, ts)` 打开/复用 `VideoPlayerDialog` 定位到 ts（复用 `seek_video` 机制，标记 `_video_path` 避免重复开窗）。
+- **agent_dialog.py**：补齐 `append_thoughts()`（v5.6 误调用但只存在 `set_thoughts` 覆盖式，启动时切工具直接 AttributeError 崩溃；现累积式，与 `append_agent_message` 语义一致）。
+
+### 🧪 验证
+- **pyflakes**：7 个改/新文件零告警。
+- **真实 E2E（1 个无变化视频）**：`_376.mp4`（17.7min，motion 判 0 变化）跑完 → `frames/<run_id>/` 落盘 ~1065 帧 + `strip.png` 生成；长图查看器可缩放、时间戳正确、AI 查询可用。
+- **回归**：相关单测（agent_tools / core_pipeline）通过，不跑全量 362（遵循 AGENTS.md 不重复验证已验证模块）。
+
 ## [5.6.0] — 2026-09-05 · 监控批量分析 Agent 化（NVIDIA Nemotron + 新算法省 99% 调用 + 二次验证）
 
 ### 🎯 监控批量分析全链路（核心新功能）

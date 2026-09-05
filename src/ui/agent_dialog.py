@@ -81,6 +81,7 @@ class AgentDialog(QWidget):
         self._attachments: list[str] = []
         self._tool_items: list[_ToolBoxItem] = []
         self._last_bubble: Optional[ChatBubble] = None
+        self._thoughts_buf: str = ""  # 思考链累积缓冲（append_thoughts 用）
         self._build_ui()
 
     # ------------------------------------------------------------------ UI
@@ -229,7 +230,24 @@ class AgentDialog(QWidget):
         self.append_agent_message(line)
 
     def set_thoughts(self, text: str) -> None:
+        self._thoughts_buf = text
         self.thinking_widget.set_text(text)
+
+    def append_thoughts(self, text: str) -> None:
+        """追加一条思考链（不覆盖已有内容，带换行）。
+
+        场景：main_window 的 on_agent_dialog_message / on_agent_dialog_tool
+        多次调用此方法累积意图/工具切换等过程信息。早期实现误以为存在
+        append_thoughts，实际只有 set_thoughts（覆盖式）——此处补齐，
+        保持与 append_agent_message / append_tool_call 一致的累积语义。
+        """
+        if not text:
+            return
+        if self._thoughts_buf:
+            self._thoughts_buf += "\n" + text
+        else:
+            self._thoughts_buf = text
+        self.thinking_widget.set_text(self._thoughts_buf)
 
     def update_last_bubble(self, chunk: str) -> None:
         """流式追加到最近一个 agent 气泡（ChatWorker 回调用）。"""
@@ -246,6 +264,7 @@ class AgentDialog(QWidget):
             if w:
                 w.deleteLater()
         self._last_bubble = None
+        self._thoughts_buf = ""
         self.thinking_widget.set_text("")
         self._attachments.clear()
         self._clear_attach_area()
