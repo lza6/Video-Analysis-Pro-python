@@ -1,0 +1,160 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   VAP Web UI 设计 Token — 与营销站 website/ 同一套玻璃拟态 2.0 语言
+   深色墨蓝底 + 青/紫极光点缀(oklch)。文本对比度基线:正文 ≥ 7:1。
+--------------------------------------------------------------------------- */
+@theme inline {
+  --color-ink: oklch(0.16 0.028 265);
+  --color-ink-2: oklch(0.21 0.035 268);
+  --color-ink-3: oklch(0.27 0.04 270);
+  --color-accent: oklch(0.8 0.12 205);
+  --color-accent-2: oklch(0.68 0.19 295);
+  --color-accent-2-deep: oklch(0.62 0.19 295);
+  --color-accent-3: oklch(0.75 0.15 340);
+  --color-mist: oklch(0.9 0.012 260);
+  --color-mute: oklch(0.72 0.02 260);
+  --color-ok: oklch(0.75 0.15 155);
+  --color-warn: oklch(0.8 0.15 85);
+  --color-danger: oklch(0.68 0.2 25);
+
+  --font-sans: "Noto Sans SC", ui-sans-serif, system-ui, "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  /* 半径尺度:卡片统一 rounded-card,内部小卡 rounded-card-sm,pill 一律 rounded-full */
+  --radius-card: 1.5rem;
+  --radius-card-sm: 1rem;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--color-ink);
+  color: var(--color-mist);
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+}
+
+::selection {
+  background: oklch(0.68 0.19 295 / 0.45);
+  color: white;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+/* 滚动条深色化 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: oklch(1 0 0 / 0.12);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(1 0 0 / 0.2);
+}
+
+/* ---------------------------- 玻璃层 ---------------------------- */
+.glass {
+  background: linear-gradient(135deg, oklch(1 0 0 / 0.09), oklch(1 0 0 / 0.035));
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid oklch(1 0 0 / 0.12);
+  box-shadow:
+    0 1px 0 0 oklch(1 0 0 / 0.1) inset,
+    0 20px 50px -20px oklch(0 0 0 / 0.5);
+}
+
+.glass-strong {
+  background: linear-gradient(135deg, oklch(1 0 0 / 0.14), oklch(1 0 0 / 0.05));
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  backdrop-filter: blur(28px) saturate(160%);
+  border: 1px solid oklch(1 0 0 / 0.16);
+  box-shadow:
+    0 1px 0 0 oklch(1 0 0 / 0.14) inset,
+    0 30px 70px -25px oklch(0 0 0 / 0.6);
+}
+
+.glass-chip {
+  background: oklch(1 0 0 / 0.06);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  border: 1px solid oklch(1 0 0 / 0.12);
+}
+
+.glass-hover {
+  transition:
+    transform 300ms var(--ease-out-expo),
+    border-color 300ms,
+    box-shadow 300ms;
+}
+.glass-hover:hover {
+  transform: translateY(-4px);
+  border-color: oklch(1 0 0 / 0.24);
+  box-shadow:
+    0 1px 0 0 oklch(1 0 0 / 0.14) inset,
+    0 30px 60px -20px oklch(0.68 0.19 295 / 0.25);
+}
+
+.glass-edge {
+  position: relative;
+}
+.glass-edge::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(160deg, oklch(1 0 0 / 0.35), oklch(1 0 0 / 0.04) 40%, transparent 70%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.text-gradient {
+  background: linear-gradient(100deg, var(--color-accent) 10%, var(--color-accent-2) 55%, var(--color-accent-3) 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* 视觉隐藏但可聚焦(a11y skip-link) */
+.sr-only-focusable:not(:focus):not(:focus-within) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

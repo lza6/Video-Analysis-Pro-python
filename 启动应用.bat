@@ -5,9 +5,10 @@ if not exist logs mkdir logs
 
 echo ========================================
 echo   Video Analysis Pro (视频分析专业版)
+echo   Web UI Edition
 echo ========================================
 echo.
-echo 正在启动 (详细日志: logs/startup_bat.log)...
+echo 正在启动 Web 服务 (详细日志: logs/startup_bat.log)...
 echo.
 
 call :main
@@ -74,7 +75,8 @@ if not errorlevel 1 (
 
 echo [ERROR] 未找到 Python 3.10 - 3.12！
 echo.
-echo 本软件需要 Python 3.10 / 3.11 / 3.12（暂不支持 3.13+，部分 AI 依赖没有对应版本）。
+echo 本软件需要 Python 3.10 / 3.11 / 3.12。
+echo （3.13+ 部分 AI 依赖可能无预编译 wheel，建议先用 3.10-3.12。）
 echo 请从以下地址下载安装，并勾选 "Add python.exe to PATH":
 echo     https://www.python.org/downloads/release/python-31011/
 echo.

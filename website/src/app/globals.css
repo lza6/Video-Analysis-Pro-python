@@ -17,6 +17,14 @@
 
   --font-sans: var(--font-noto), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-jb), ui-monospace, "Cascadia Mono", monospace;
+
+  /* 半径尺度：卡片统一 1.5rem（rounded-card），内部小卡 1rem（rounded-card-sm），
+     pill 形一律用 rounded-full。避免 rounded-3xl / 2xl / [2.5rem] 随手决定。 */
+  --radius-card: 1.5rem;
+  --radius-card-sm: 1rem;
+
+  /* 全站统一缓动 — expo-out，和 motion 组件 transition 的 ease 数组保持同曲线 */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 html {

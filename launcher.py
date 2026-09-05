@@ -254,41 +254,39 @@ if __name__ == "__main__":
                 if is_running_in_target_venv(expected_venv_python):
                     logging.info("当前正在目标虚拟环境中运行。")
                     try:
-                        desktop_app_path = "src/ui/main_window.py"
+                        desktop_app_path = "src/web/serve.py"
                         if os.path.exists(desktop_app_path):
-                             logging.info(f"正在直接启动桌面应用模块: {desktop_app_path}")
-                             
+                             logging.info(f"正在直接启动 Web 服务模块: {desktop_app_path}")
+
                              # Fix module search path before import
                              sys.path.append(os.getcwd())
-                             
+
                              try:
-                                 from src.ui.main_window import run_main
-                                 exit_code = run_main()
+                                 from src.web.serve import run_server
+                                 exit_code = run_server()
                                  if exit_code != 0:
-                                     logging.error(f"桌面应用异常退出. Exit Code: {exit_code}")
+                                     logging.error(f"Web 服务异常退出. Exit Code: {exit_code}")
                                      sys.exit(exit_code)
                                  else:
-                                     logging.info("桌面应用正常退出。")
+                                     logging.info("Web 服务正常退出。")
                                      sys.exit(0)
                              except Exception as e_import:
                                  logging.error(f"直接导入启动失败: {e_import}。尝试回退到子进程启动方式。")
                                  # Fallback to subprocess if direct import/run fails
                                  p = subprocess.Popen(
-                                     [sys.executable, "-m", "src.ui.main_window"],
-                                     stdout=None, 
+                                     [sys.executable, "-m", "src.web.serve"],
+                                     stdout=None,
                                      stderr=None
                                  )
                                  p.wait()
                                  sys.exit(p.returncode)
 
                         else:
-                             # 历史 bug: 回退到不存在的 app.py（Gradio 版已删除）会崩溃。
-                             # 现在明确报错并提示，而非静默尝试。
-                             logging.critical("未找到桌面应用入口 src/ui/main_window.py")
+                             logging.critical("未找到 Web 服务入口 src/web/serve.py")
                              root_err = tk.Tk(); root_err.withdraw()
                              messagebox.showerror(
                                  "启动失败",
-                                 "未找到桌面应用入口 src/ui/main_window.py。\n"
+                                 "未找到 Web 服务入口 src/web/serve.py。\n"
                                  "请确认从项目根目录运行 launcher.py，且源码完整。"
                              )
                              if root_err.winfo_exists(): root_err.destroy()
