@@ -1,5 +1,27 @@
 # Changelog — Video Analysis Pro
 
+## [5.8.0] — 2026-09-05 · NVIDIA Integrate 内置提供商接入 UI（客户端类型 + 自动加载 .env + 批量 router）
+
+### 🎯 核心问题
+用户启动后看到 `https://api.iflow.cn/v1` + `⚠️ 连接成功但未找到模型`，以为是 NVIDIA 没接入。**根因**：NVIDIA 11 key 后端有（`provider_router.load_from_env` 读 `.env` 的 `VAP_NV_API_KEYS`），但**没接 UI**——单视频分析的模型配置 UI 从不加载 `.env`，用户只能手填旧 API 网关；批量监控 `_build_runner` 把 `router=None` 传给 `BatchRunner`（`batch_tab.py:315`），跑起来 `router.post_nvidia` 必 `AttributeError`。`NVIDIA_MODELS` 注册表（`nvidia_models.py`，含 Nemotron Omni/Cosmos3 等）也没接 UI 下拉。
+
+### 🔧 改动（2 文件）
+- **main_window.py**：
+  - 客户端类型下拉加第 5 项「NVIDIA Integrate (内置多 Key)」。
+  - `on_client_changed` 新增 `is_nvidia` 分支 → `_apply_nvidia_preset()`：自动填 URL（`NVIDIA_INTEGRATE_BASE_URL`）+ 从 `.env` 取第一个 key 填入 + 模型下拉填 `nvidia_models` 注册表（视频模型在前）。
+  - `_load_env_file()`：加载项目根 `.env` 到 dict（不污染 `os.environ`，进程环境变量优先），补齐单视频分析 UI 从不加载 .env 的缺口。
+  - `on_api_check_finished`：NVIDIA Integrate 的 `/v1/models` 返回非标准格式（200 但无 `data` 字段，旧逻辑判"未找到模型"）→ 现在用 `nvidia_models` 注册表补齐下拉，标"✅ 连接成功"，不再误报。
+  - `load_model` 的 client 构造：`client_idx in (1,2,4)` 都走 `APIGatewayClient`（NVIDIA 走 OpenAI 兼容端点；视频分片的 raw REST payload 差异由 `nvidia_models.build_nvidia_payload` 在 batch 路径处理）。
+  - `load_settings`：`client_type` 越界（v5.8 加了 NVIDIA=4，旧库存的 idx 可能超）回退到默认 API 网关而非崩溃。
+- **batch_tab.py**：
+  - `_build_router()`：从 `.env` 加载 NVIDIA 11 key 构造 `ProviderRouter`（`load_from_env`），不再传 `None`。
+  - `_build_runner` 用真实 router，让批量监控的 `router.post_nvidia` 真能跑。
+
+### 🧪 验证
+- **pyflakes**：2 个改文件零告警。
+- **单测**（含 `test_provider_router`）：后台运行中。
+- **真实启动**（你刚贴的日志）：`schema 升级：表 runs 新增列 strip_path TEXT`（v5.7 自动迁移生效）+ `✅ 所有必要模型组件已就绪` + 工具箱切换正常，无崩溃。v5.8 后客户端类型选「NVIDIA Integrate」即自动填好一切。
+
 ## [5.7.1] — 2026-09-05 · 剩余风险闭环（单帧命中 + 帧留存策略 + launcher 归一 + AI 预填）
 
 ### 🎯 三个剩余风险全部闭环

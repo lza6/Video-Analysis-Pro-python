@@ -308,11 +308,18 @@ class BatchTab(QWidget):
         self.btn_resume.setEnabled(True)
 
     def _build_runner(self):
-        """构造 BatchRunner 实例并连接信号。router 暂传 None（T2 允许）。"""
+        """构造 BatchRunner 实例并连接信号。
+
+        v5.8：router 不再传 None——从 .env 自动加载 NVIDIA 11 key 轮换。
+        之前 router=None 导致 batch_runner._judge_segment 调 router.post_nvidia
+        时 AttributeError；现在补齐，让批量监控真正能用 NVIDIA。
+        """
         if not _BATCH_RUNNER_AVAILABLE:
             return None
         config = self._collect_config()
-        runner = _BatchRunner(config=config, run_store=self._run_store, router=None)
+        router = self._build_router()
+        runner = _BatchRunner(config=config, run_store=self._run_store,
+                              router=router)
         # 接缝：BatchRunner 信号 → 本 Tab 槽（Qt 自动跨线程回主线程）
         # 用 *args 槽兼容 T2 多种签名，详见各槽注释。
         runner.run_started.connect(self._on_run_started)
@@ -323,6 +330,26 @@ class BatchTab(QWidget):
         runner.batch_finished.connect(self._on_batch_finished)
         runner.error.connect(self._on_runner_error)
         return runner
+
+    def _build_router(self):
+        """v5.8：从 .env 加载 NVIDIA 11 key 构造 ProviderRouter。
+
+        复用 provider_router.load_from_env（读 VAP_NV_API_KEYS 逗号分隔）。
+        失败则返回 None（batch_runner 会兜底提示无 nvidia key）。
+        """
+        try:
+            from src.core.provider_router import load_from_env, ProviderRouter
+            from pathlib import Path
+            env_path = Path(__file__).resolve().parents[2] / ".env"
+            keys = load_from_env(str(env_path) if env_path.exists() else None)
+            if not keys:
+                logger.warning("[batch] .env 未配 VAP_NV_API_KEYS，"
+                               "批量监控无 NVIDIA key 可用")
+                return None
+            return ProviderRouter(keys, rate_limit_per_min=40)
+        except Exception as e:
+            logger.warning(f"[batch] router 构造失败: {e}")
+            return None
 
     def _collect_config(self) -> dict:
         """从 UI 收集批量配置（传给 BatchRunner）。"""

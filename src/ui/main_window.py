@@ -694,9 +694,15 @@ class DesktopApp(QMainWindow):
         layout_model = QVBoxLayout(self.group_model_outer)
         layout_model.setSpacing(12)
         
-        # Client Type
+        # Client Type（v5.8：加 NVIDIA Integrate 内置提供商，自动从 .env 加载 11 key 轮换）
         self.combo_client = QComboBox()
-        self.combo_client.addItems(["Ollama (Local)", "API 网关 (OpenAI/DeepSeek)", "LM Studio (Local/V1)", "本地模型文件 (.gguf/.pt)"])
+        self.combo_client.addItems([
+            "Ollama (Local)",
+            "API 网关 (OpenAI/DeepSeek)",
+            "LM Studio (Local/V1)",
+            "本地模型文件 (.gguf/.pt)",
+            "NVIDIA Integrate (内置多 Key)",
+        ])
         self.combo_client.setCurrentIndex(1) # Default to API Gridway
         self.combo_client.currentIndexChanged.connect(self.on_client_changed)
         layout_model.addWidget(QLabel("客户端类型:"))
@@ -1096,7 +1102,16 @@ class DesktopApp(QMainWindow):
         """Restore previous session settings."""
         try:
             cfg = self.app_config['LastUsed']
-            self.combo_client.setCurrentIndex(int(cfg.get('client_type', 1)))
+            # client_type 可能存的是超出当前下拉项数的旧值（v5.8 加了 NVIDIA=4），
+            # 越界时回退到默认 API 网关（idx 1）而非崩溃。
+            ct_raw = cfg.get('client_type', 1)
+            try:
+                ct = int(ct_raw)
+            except (TypeError, ValueError):
+                ct = 1
+            if ct >= self.combo_client.count():
+                ct = 1
+            self.combo_client.setCurrentIndex(ct)
             self.txt_api_url.setPlainText(cfg.get('api_url', ""))
             # 优先从密钥环读取 API Key（旧版明文自动迁移后从 ini 清空）
             try:
@@ -1733,19 +1748,23 @@ class DesktopApp(QMainWindow):
 
     def on_client_changed(self, index):
         """Handle UI changes based on inference client selection."""
-        # 0: Ollama, 1: API, 2: LM Studio, 3: Local File
+        # 0: Ollama, 1: API, 2: LM Studio, 3: Local File, 4: NVIDIA Integrate (v5.8)
         is_ollama = (index == 0)
         is_api = (index == 1)
         is_lmstudio = (index == 2)
         is_local = (index == 3)
-        
-        self.grp_api.setVisible(is_api or is_lmstudio)
+        is_nvidia = (index == 4)
+
+        self.grp_api.setVisible(is_api or is_lmstudio or is_nvidia)
         self.grp_ollama.setVisible(is_ollama or is_local)
         self.btn_unload.setVisible(is_ollama)
-        
+
         if is_lmstudio:
             self.txt_api_url.setPlainText("http://localhost:1234/v1")
             self.txt_api_key.setPlainText("lm-studio")
+        elif is_nvidia:
+            # v5.8：NVIDIA Integrate 内置提供商，自动从 .env 加载 11 key 轮换
+            self._apply_nvidia_preset()
         elif is_api:
             # Maybe restore last used API config
             pass
@@ -1824,6 +1843,83 @@ class DesktopApp(QMainWindow):
                      self.status_console.resource_monitor.update_vram(vram_used, vram_total)
                  except Exception: pass
 
+    def _load_env_file(self) -> dict:
+        """v5.8：加载项目根 .env 到 dict（不污染 os.environ，进程环境变量优先）。
+
+        provider_router.load_from_env 已有同款逻辑，但那只在批量监控里用。
+        单视频分析的模型配置 UI 之前从不加载 .env → 用户看到 iflow.cn 是因为
+        手填在旧 API 网关里，NVIDIA 11 key 后端有但没接 UI。这里补齐。
+        """
+        env_path = Path(__file__).resolve().parents[2] / ".env"
+        local_env: dict = {}
+        if not env_path.exists():
+            return local_env
+        try:
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if k:
+                    local_env[k] = v
+        except Exception as e:
+            logging.debug(f"加载 .env 失败: {e}")
+        return local_env
+
+    def _apply_nvidia_preset(self) -> None:
+        """v5.8：把 NVIDIA Integrate 内置提供商预填到 API 配置区。
+
+        - URL: https://integrate.api.nvidia.com/v1（NVIDIA_INTEGRATE_BASE_URL）
+        - Key: 从 .env 的 VAP_NV_API_KEYS 取第一个（11 key 轮换由
+          provider_router.load_from_env + BatchRunner/单视频分析时构造 router 处理）
+        - 模型下拉：填 nvidia_models 注册表的视频模型 + LLM 模型
+        """
+        try:
+            from src.core.nvidia_models import (
+                NVIDIA_INTEGRATE_BASE_URL, list_by_category,
+            )
+        except Exception as e:
+            logging.warning(f"[nvidia_preset] nvidia_models 不可用: {e}")
+            return
+        self.txt_api_url.setPlainText(NVIDIA_INTEGRATE_BASE_URL)
+        env = self._load_env_file()
+        nv_keys_raw = (os.environ.get("VAP_NV_API_KEYS")
+                       or env.get("VAP_NV_API_KEYS")
+                       or os.environ.get("VAP_NV_API_KEY")
+                       or env.get("VAP_NV_API_KEY")
+                       or "")
+        first_key = ""
+        if nv_keys_raw:
+            for part in nv_keys_raw.split(","):
+                part = part.strip()
+                if part:
+                    first_key = part
+                    break
+        self.txt_api_key.setPlainText(first_key)
+        n_keys = len([k for k in nv_keys_raw.split(",") if k.strip()])
+        # 模型下拉填注册表（视频模型在前，便于单视频分析直接选）
+        self.combo_api_model.clear()
+        for m in (list_by_category("video") + list_by_category("llm")):
+            self.combo_api_model.addItem(f"{m.id}")
+        # 默认选首选视频模型
+        try:
+            from src.core.nvidia_models import get_video_model
+            vm = get_video_model()
+            if vm:
+                idx = self.combo_api_model.findText(vm.id)
+                if idx >= 0:
+                    self.combo_api_model.setCurrentIndex(idx)
+        except Exception:
+            pass
+        self.lbl_api_preview.setText(
+            f"NVIDIA Integrate | {n_keys} key 内置轮换 | 视频模型已加载"
+            if n_keys else "⚠ .env 未配 VAP_NV_API_KEYS，请补 key")
+        self.lbl_api_preview.setStyleSheet("color: #27ae60; font-style: italic;")
+        logging.info(f"[nvidia_preset] NVIDIA Integrate 已预填：{n_keys} key，"
+                     f"{self.combo_api_model.count()} 个模型")
+
     def on_api_url_changed(self):
         from src.core.logic import APIGatewayClient  # noqa: F401
         url = self.txt_api_url.toPlainText().strip()
@@ -1870,6 +1966,26 @@ class DesktopApp(QMainWindow):
                 self.btn_check_api.setText("✅ 连接成功")
                 self.lbl_api_preview.setText(f"Chat Endpoint: {chat_endpoint}")
             else:
+                # v5.8：NVIDIA Integrate 的 /v1/models 返回非标准格式（200 但无 data 字段），
+                # 不算失败——用 nvidia_models 注册表补齐下拉，让用户能继续选模型。
+                url = self.txt_api_url.toPlainText().strip()
+                if "integrate.api.nvidia.com" in url:
+                    try:
+                        from src.core.nvidia_models import list_by_category
+                        self.combo_api_model.clear()
+                        for m in (list_by_category("video")
+                                  + list_by_category("llm")):
+                            self.combo_api_model.addItem(m.id)
+                        logging.info("✅ NVIDIA Integrate 连接正常（/models 非 OpenAI "
+                                     "格式，已用内置注册表补齐模型下拉）")
+                        self.btn_check_api.setText("✅ 连接成功")
+                        self.lbl_api_preview.setText(
+                            f"NVIDIA Integrate | 内置注册表模型已加载 | "
+                            f"Chat Endpoint: {chat_endpoint}")
+                        self.sync_agent_models()
+                        return
+                    except Exception as e:
+                        logging.warning(f"NVIDIA 模型补齐失败: {e}")
                 logging.info("⚠️ 连接成功但未找到模型 (可能是格式不兼容或无权限列表)")
                 self.btn_check_api.setText("⚠️ 无模型列表")
                 
@@ -2217,9 +2333,9 @@ class DesktopApp(QMainWindow):
         try:
             if client_idx == 0 or client_idx == 3: # Ollama or Local
                 model_name = self.combo_ollama_model.currentText()
-            else: # API or LM
+            else: # API / LM Studio / NVIDIA Integrate (v5.8)
                 model_name = self.combo_api_model.currentText().strip()
-                
+
             if not model_name or "请选择" in model_name or "未找到" in model_name:
                 raise ValueError("请选择一个有效的模型进行加载")
 
@@ -2231,9 +2347,12 @@ class DesktopApp(QMainWindow):
             if client_idx == 0:
                 from src.core.logic import OllamaClient
                 client = OllamaClient()
-            elif client_idx == 1 or client_idx == 2:
+            elif client_idx in (1, 2, 4):  # API / LM Studio / NVIDIA Integrate
                 api_url = self.txt_api_url.toPlainText().strip()
                 api_key = self.txt_api_key.toPlainText().strip()
+                # v5.8：NVIDIA Integrate 走 OpenAI 兼容端点，APIGatewayClient 即可
+                # （NVIDIA 的 raw REST payload 差异由 nvidia_models.build_nvidia_payload
+                # 在视频分片路径处理，单视频 LLM 对话走标准 OpenAI chat/completions）
                 from src.core.logic import APIGatewayClient
                 client = APIGatewayClient(api_key, api_url)
             else: # Local file
