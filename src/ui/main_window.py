@@ -2315,6 +2315,25 @@ class DesktopApp(QMainWindow):
             create_trace_item_tool(context_provider),
             {"item_keyword": "黑色旅行袋"}
         )
+        # v7.0 指南 4.3：skill 自动生成 + 4.5 RTSP 实时流触发
+        from src.core.agent_tools import (
+            create_generate_skill_tool, create_rtsp_monitor_tool)
+        self.tool_registry.register_tool(
+            "generate_skill",
+            "Auto-generate a new SKILL.md for an unrecognized scene "
+            "(parking/face/fire/vehicle). No LLM call (rule templates). "
+            "Args: {'text': '场景描述'}",
+            create_generate_skill_tool(context_provider),
+            {"text": "停车场车牌识别"}
+        )
+        self.tool_registry.register_tool(
+            "start_rtsp_monitor",
+            "Start RTSP live stream monitoring (motion detection + VLM). "
+            "Args: {'rtsp_url': 'rtsp://...', 'item_description': '找什么'}",
+            create_rtsp_monitor_tool(context_provider),
+            {"rtsp_url": "rtsp://user:pass@host:554/stream",
+             "item_description": "黑色旅行袋"}
+        )
 
     def _on_batch_progress_to_agent(self, video_name: str, seg_idx: int,
                                      hits: int, match: bool, conf: float) -> None:

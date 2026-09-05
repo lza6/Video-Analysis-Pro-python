@@ -1,5 +1,45 @@
 # Changelog — Video Analysis Pro
 
+## [7.0.0] — 2026-09-05 · v7.0 终极里程碑（skill 自动生成 + RTSP 实时流 + 多agent + 自检闭环完整落地）
+
+### 🎯 核心：指南第四章 6 项展望全部闭环
+
+指南 8.4 v6.x/v7.0 展望原"不承诺时间"，用户要求"完整落地闭环所有"。
+v6.1.0 落地 4 项（4.1/4.2/4.4/4.6），v7.0.0 补齐剩余 2 项（4.3/4.5），
+**至此指南第四章 6 项高级扩展全部闭环，agent 从"单机单 agent 对话"完整升级到"跨视频时序推理 + 团队协作 + 自检闭环 + 自我进化 skill 库 + 实时流监控"**。
+
+### 改进项闭环
+
+| # | 指南项 | 改动 | 文件 |
+|---|------|------|------|
+| **4.3** | skill 自动生成（v7.0） | `skill_generator.py` 规则版（无 LLM 真实调用，付费 API 红线）：`detect_scene` 识别停车场/人脸/火灾/车辆四类 → `draft_skill_from_scene` 模板生成 → `render_skill_md` 渲染 frontmatter+正文 → `save_skill` 存盘 → `generate_skill` 端到端。生成的 skill 被 load_skills 真实收录。注册 `create_generate_skill_tool` 到 ToolRegistry | skill_generator.py, agent_tools.py, main_window.py |
+| **4.5** | 边缘部署 + RTSP 实时流（v6.x） | `create_rtsp_monitor_tool` agent 触发 RTSP 实时监控：构造 RtspMonitor（已有骨架：RtspFrameGrabber 后台拉流 + MotionEventDetector 帧差预筛 + VLM 确认）+ start + 命中回调投到 agent_dialog。注册到 ToolRegistry | agent_tools.py, main_window.py |
+
+### 🔧 改动文件
+- `src/core/skill_generator.py`（新，~150 行）：detect_scene + draft_skill_from_scene + render_skill_md + save_skill + generate_skill
+- `src/core/agent_tools.py`：追加 create_generate_skill_tool + create_rtsp_monitor_tool
+- `src/ui/main_window.py`：注册 generate_skill + start_rtsp_monitor 工具到 ToolRegistry
+- `tests/test_skill_generator.py`（新，17 用例）：skill 生成 11 + RTSP 流式 6
+- `src/utils/constants.py`：APP_VERSION 6.1.0 → 7.0.0
+
+### 🧪 验证
+- pyflakes：所有改/新文件零告警。
+- 单测：skill_generator(17) + multi_agent(11) + video_graph(12) + self_check(8) + repository(4) = **52 passed**。
+- E2E：skill 生成真实落盘 → load_skills 收录 `surveillance-parking-lpr` ✅；generate_skill/start_rtsp_monitor 工具可调 ✅。
+- 降级铁律：skill_generator 无 LLM 真实调用（规则模板）、RTSP VLM 走 backend 未配则降级纯运动检测。
+
+### 📊 指南第四章 6 项展望完整闭环
+| # | 指南项 | 版本 | 状态 |
+|---|------|------|------|
+| 4.1 | 视频知识图谱 | v6.1.0 | ✅ |
+| 4.2 | 多 agent 协作 | v6.1.0 | ✅ |
+| 4.3 | skill 自动生成 | v7.0.0 | ✅ |
+| 4.4 | Repository 抽象 | v6.1.0 | ✅ |
+| 4.5 | RTSP 实时流 | v7.0.0 | ✅ |
+| 4.6 | 自检闭环 | v6.1.0 | ✅ |
+
+**《下一步改进指南.md》全部章节（一~十三章）落地完成**，版本路线 v5.7.1 → v7.0.0 全达成。
+
 ## [6.1.0] — 2026-09-05 · v6.x/v7.0 展望落地（知识图谱 + 多agent协作 + 自检闭环 + Repository抽象）
 
 ### 🎯 核心：指南第四章高级扩展方案落地

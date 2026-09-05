@@ -503,6 +503,84 @@ def create_summarize_hits_tool(app_context_getter):
     return summarize_hits
 
 
+# --- v7.0 指南 4.3：skill 自动生成 + 4.5 RTSP 实时流触发 ---
+
+def create_generate_skill_tool(app_context_getter):
+    """agent 自动生成新 skill（指南 4.3）。
+
+    不真实调付费 LLM（红线）：用规则模板生成（停车场/人脸/火灾/车辆四类）。
+    用户给预算后可扩展为调 LLM 补全 algorithm/parameters。
+    成功后存 config/skills/<name>/SKILL.md，下次 load_skills 自动收录。
+    """
+    def generate_skill(text: str = ""):
+        from src.core.skill_generator import generate_skill as _gen
+        from src.utils.constants import CONFIG_DIR
+        skills_dir = Path(CONFIG_DIR) / "skills"
+        if not text:
+            return "请提供场景描述（如：停车场车牌识别）。"
+        result = _gen(text, skills_dir, overwrite=False)
+        if result is None:
+            return ("未识别到已知场景关键词。目前支持：停车场/车牌、"
+                    "人脸/face、火灾/火焰/烟雾、车辆计数/车流。"
+                    "可描述更具体或由人工创建 skill。")
+        if not result.get("ok"):
+            return (f"skill 生成失败：{result.get('error', '')}\n"
+                    f"（skill 可能已存在，需先删除或确认覆盖）")
+        return (f"✅ 已生成新 skill：{result['skill_name']}\n"
+                f"路径：{result['path']}\n"
+                f"场景：{result['scene']}\n"
+                f"重启应用或点「刷新 skills」即可自动匹配。")
+    return generate_skill
+
+
+def create_rtsp_monitor_tool(app_context_getter):
+    """agent 触发 RTSP 实时流监控（指南 4.5）。
+
+    不在此真实拉流（需摄像头凭据 + 网络）：只构造 RtspMonitor 并 start，
+    返回"已启动"提示。真实拉流由 RtspFrameGrabber 后台线程做，
+    命中回调投到 agent_dialog。
+
+    付费 API 红线：VLM 判断走 backend.chat_stream，若 backend 未配则
+    RtspMonitor 的 _vlm_check 会失败降级（只做运动检测不送 VLM）。
+    """
+    def start_rtsp_monitor(rtsp_url: str = "", item_description: str = ""):
+        app = app_context_getter()
+        if not app:
+            return "App context missing."
+        if not rtsp_url:
+            return "请提供 RTSP URL（如 rtsp://user:pass@host:554/stream）。"
+        try:
+            from src.core.rtsp_stream import RtspMonitor
+            from src.utils.constants import CONFIG_DIR
+            backend = getattr(app, 'analyzer', None) or getattr(app, 'api_gateway', None)
+            key_item = ""
+            tab_batch = getattr(app, 'tab_batch', None)
+            if tab_batch is not None and hasattr(tab_batch, 'txt_key_image'):
+                key_item = tab_batch.txt_key_image.text().strip()
+            work_dir = str(Path(CONFIG_DIR) / "rtsp_cache")
+            monitor = RtspMonitor(
+                rtsp_url, backend, key_item_image=key_item,
+                item_description=item_description or "关键物品",
+                work_dir=work_dir)
+            # 命中回调 → 投到 agent_dialog
+            def _on_hit_app(ev):
+                try:
+                    if hasattr(app, 'agent_dialog'):
+                        app.agent_dialog.append_agent_message(
+                            f"📡 RTSP 命中 @ {ev.timestamp:.0f}s: "
+                            f"{ev.detail[:80]}（conf={ev.confidence:.2f}）")
+                except Exception:
+                    pass
+            monitor.start(fps=1.0)
+            # 挂到 app 供 stop
+            app._rtsp_monitor = monitor
+            return (f"📡 RTSP 监控已启动：{rtsp_url[:40]}…\n"
+                    f"运动检测 + VLM 判断后台运行，命中会实时投到对话。")
+        except Exception as e:
+            return f"RTSP 监控启动失败：{e}"
+    return start_rtsp_monitor
+
+
 # --- v6.1 视频知识图谱：跨视频时序推理工具（指南 4.1）---
 
 def create_trace_item_tool(app_context_getter):
