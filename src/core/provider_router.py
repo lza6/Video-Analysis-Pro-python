@@ -210,7 +210,9 @@ class ProviderRouter:
 
     def __init__(self, keys: List[ProviderKey], *,
                  rate_limit_per_min: int = RATE_LIMIT_PER_MIN,
-                 max_concurrent_per_key: int = DEFAULT_MAX_CONCURRENT_PER_KEY):
+                 max_concurrent_per_key: int = DEFAULT_MAX_CONCURRENT_PER_KEY,
+                 backoff_sec: float = SERVER_ERROR_BACKOFF_SEC,
+                 same_key_retries: int = SERVER_ERROR_SAME_KEY_RETRIES):
         # 按 priority 降序排（priority 大的优先）；同 priority 保持入参顺序
         self._keys: List[ProviderKey] = sorted(
             keys, key=lambda k: -k.priority)
@@ -221,6 +223,11 @@ class ProviderRouter:
         )
         self._session = requests.Session()
         self._lock = Lock()  # 保护运行态更新
+        # 503/5xx 短退避参数（I5.8-router-1：可由 .env 配置）。
+        # 默认与模块级常量一致，保持向后兼容；调用方（batch_tab._build_router）
+        # 可从 load_router_config_from_env 读 .env 后显式传入。
+        self._backoff_sec = max(0.0, float(backoff_sec))
+        self._same_key_retries = max(0, int(same_key_retries))
 
     # ---- 查询 ----
     def list_keys(self, provider: Optional[str] = None) -> List[ProviderKey]:
@@ -388,17 +395,17 @@ class ProviderRouter:
                         resp.close()
                         last_error = f"HTTP {code} {body}"
                         self.record_result(key.id, code, last_error)
-                        if same_key_tries < SERVER_ERROR_SAME_KEY_RETRIES:
+                        if same_key_tries < self._same_key_retries:
                             same_key_tries += 1
                             logger.info(
                                 f"[router] nvidia key {key.name} {last_error}，"
-                                f"短退避 {SERVER_ERROR_BACKOFF_SEC}s 重试同 key "
-                                f"({same_key_tries}/{SERVER_ERROR_SAME_KEY_RETRIES})")
-                            time.sleep(SERVER_ERROR_BACKOFF_SEC)
+                                f"短退避 {self._backoff_sec}s 重试同 key "
+                                f"({same_key_tries}/{self._same_key_retries})")
+                            time.sleep(self._backoff_sec)
                             continue  # 同 key 重试
                         logger.warning(
                             f"[router] nvidia key {key.name} {last_error}，"
-                            f"同 key 重试 {SERVER_ERROR_SAME_KEY_RETRIES} 次仍 5xx，"
+                            f"同 key 重试 {self._same_key_retries} 次仍 5xx，"
                             f"切下一个 key（无限重试）")
                         break  # 同 key 重试用尽，外层切下一个 key
                     else:
@@ -517,6 +524,82 @@ def load_from_env(env_path: Optional[str] = None) -> List[ProviderKey]:
         _add("kilo", kilo_raw, KILO_DEFAULT_BASE_URL)
 
     return keys
+
+
+def load_router_config_from_env(
+        env_path: Optional[str] = None) -> Dict[str, Any]:
+    """从 .env 读 ProviderRouter 调优参数（I5.8-router-1/2）。
+
+    返回 dict（键固定，调用方按需取用，不传给 ProviderRouter 就用默认值）：
+      - backoff_sec: 503/5xx 短退避秒数（默认 1.5 = SERVER_ERROR_BACKOFF_SEC）
+      - same_key_retries: 同 key 重试次数（默认 2 = SERVER_ERROR_SAME_KEY_RETRIES）
+      - max_concurrent_per_key: 每 key 并发上限（默认 2 =
+        DEFAULT_MAX_CONCURRENT_PER_KEY）
+
+    env_path 不给则只读进程已加载的环境变量；给了则文件 + 进程环境变量
+    合并（进程环境变量优先），不污染 os.environ。值为空或非法时回退默认。
+    本函数不改变 load_from_env 的返回签名（仍返回 List[ProviderKey]），
+    仅作为独立入口供调用方（batch_tab._build_router）读取路由器调优参数。
+    """
+    local_env: Dict[str, str] = {}
+    if env_path:
+        from pathlib import Path
+        p = Path(env_path)
+        if p.exists():
+            for line in p.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if k:
+                    local_env[k] = v
+
+    def _get(name: str) -> str:
+        # 进程环境变量优先于文件
+        return os.environ.get(name, local_env.get(name, ""))
+
+    def _as_float(name: str, default: float) -> float:
+        raw = _get(name).strip()
+        if not raw:
+            return default
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                f"[router] {name}={raw!r} 非法，回退默认 {default}")
+            return default
+        if val < 0:
+            logger.warning(
+                f"[router] {name}={val} 为负，回退默认 {default}")
+            return default
+        return val
+
+    def _as_int(name: str, default: int) -> int:
+        raw = _get(name).strip()
+        if not raw:
+            return default
+        try:
+            val = int(raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                f"[router] {name}={raw!r} 非法，回退默认 {default}")
+            return default
+        if val < 0:
+            logger.warning(
+                f"[router] {name}={val} 为负，回退默认 {default}")
+            return default
+        return val
+
+    return {
+        "backoff_sec": _as_float(
+            "VAP_NV_BACKOFF_SEC", SERVER_ERROR_BACKOFF_SEC),
+        "same_key_retries": _as_int(
+            "VAP_NV_SAME_KEY_RETRIES", SERVER_ERROR_SAME_KEY_RETRIES),
+        "max_concurrent_per_key": _as_int(
+            "VAP_NV_MAX_CONCURRENT_PER_KEY", DEFAULT_MAX_CONCURRENT_PER_KEY),
+    }
 
 
 def load_from_9router(path: str) -> List[ProviderKey]:

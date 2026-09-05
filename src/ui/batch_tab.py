@@ -85,9 +85,11 @@ _DEFAULT_FRAME_CHANGE_PCT = 20
 # BatchRunner 可选 import（T2 batch_runner.py 可能未落地）
 try:
     from src.core.batch_runner import BatchRunner as _BatchRunner  # type: ignore
+    from src.core.batch_runner import BatchConfig as _BatchConfig  # type: ignore
     _BATCH_RUNNER_AVAILABLE = True
 except ImportError:
     _BatchRunner = None  # type: ignore[assignment]
+    _BatchConfig = None  # type: ignore[assignment]
     _BATCH_RUNNER_AVAILABLE = False
 
 
@@ -310,16 +312,33 @@ class BatchTab(QWidget):
     def _build_runner(self):
         """构造 BatchRunner 实例并连接信号。
 
-        v5.8：router 不再传 None——从 .env 自动加载 NVIDIA 11 key 轮换。
-        之前 router=None 导致 batch_runner._judge_segment 调 router.post_nvidia
-        时 AttributeError；现在补齐，让批量监控真正能用 NVIDIA。
+        v5.8 断点 B7 修复（P0 生产阻断）：_collect_config 返回 dict，
+        但 BatchRunner.__init__(config: BatchConfig) 用属性访问——之前直接传
+        dict 立即抛 AttributeError: 'dict' object has no attribute 'key_item_image'，
+        被 _on_start 的 try/except 吞成"错误：dict object..."状态文案，**生产环境
+        点"开始批量"必崩**，37 个单测只断言 dict 字段没断言能构造 BatchRunner
+        （测试绿但功能坏）。现做 BatchConfig(**dict) 转换。
+        v5.8 断点 B2：传 on_segment_judged 回调给 BatchRunner（agent 每轮介入）。
         """
         if not _BATCH_RUNNER_AVAILABLE:
             return None
-        config = self._collect_config()
+        cfg_dict = self._collect_config()
+        try:
+            cfg = _BatchConfig(**cfg_dict)
+        except TypeError as e:
+            # dict 含 BatchConfig 不识别的字段（如未来扩展）→ pop 掉未知字段兜底
+            from dataclasses import fields as _dc_fields
+            valid = {f.name for f in _dc_fields(_BatchConfig)}
+            cfg_dict_clean = {k: v for k, v in cfg_dict.items() if k in valid}
+            logger.warning(
+                f"[batch] _collect_config 含未知字段被过滤: {e}；"
+                f"cleaned={set(cfg_dict) - valid}")
+            cfg = _BatchConfig(**cfg_dict_clean)
         router = self._build_router()
-        runner = _BatchRunner(config=config, run_store=self._run_store,
-                              router=router)
+        # v5.8 断点 B2：agent 每轮介入回调（stop/deep_dive/continue）
+        on_seg = getattr(self, '_agent_decide_segment', None)
+        runner = _BatchRunner(config=cfg, run_store=self._run_store,
+                              router=router, on_segment_judged=on_seg)
         # 接缝：BatchRunner 信号 → 本 Tab 槽（Qt 自动跨线程回主线程）
         # 用 *args 槽兼容 T2 多种签名，详见各槽注释。
         runner.run_started.connect(self._on_run_started)
@@ -334,19 +353,29 @@ class BatchTab(QWidget):
     def _build_router(self):
         """v5.8：从 .env 加载 NVIDIA 11 key 构造 ProviderRouter。
 
-        复用 provider_router.load_from_env（读 VAP_NV_API_KEYS 逗号分隔）。
+        复用 provider_router.load_from_env（读 VAP_NV_API_KEYS 逗号分隔）+
+        load_router_config_from_env（读退避/重试/并发参数，断点 router-1/2）。
         失败则返回 None（batch_runner 会兜底提示无 nvidia key）。
         """
         try:
-            from src.core.provider_router import load_from_env, ProviderRouter
+            from src.core.provider_router import (
+                load_from_env, load_router_config_from_env, ProviderRouter)
             from pathlib import Path
             env_path = Path(__file__).resolve().parents[2] / ".env"
-            keys = load_from_env(str(env_path) if env_path.exists() else None)
+            env_str = str(env_path) if env_path.exists() else None
+            keys = load_from_env(env_str)
             if not keys:
                 logger.warning("[batch] .env 未配 VAP_NV_API_KEYS，"
                                "批量监控无 NVIDIA key 可用")
                 return None
-            return ProviderRouter(keys, rate_limit_per_min=40)
+            cfg = load_router_config_from_env(env_str)
+            return ProviderRouter(
+                keys,
+                rate_limit_per_min=40,
+                backoff_sec=cfg.get("backoff_sec", 1.5),
+                same_key_retries=cfg.get("same_key_retries", 2),
+                max_concurrent_per_key=cfg.get("max_concurrent_per_key", 2),
+            )
         except Exception as e:
             logger.warning(f"[batch] router 构造失败: {e}")
             return None
@@ -617,6 +646,33 @@ class BatchTab(QWidget):
     def _on_strip_seek(self, video_path: str, ts: float) -> None:
         """转发长图查看器的跳转请求给 main_window（打开播放器定位到 ts）。"""
         self.strip_seek_requested.emit(video_path, ts)
+
+    def _agent_decide_segment(self, payload: dict) -> str:
+        """v5.8 断点 B2：batch_runner 每轮介入回调 → agent 决策。
+
+        规则版（无 LLM 也跑）：连续命中数≥2 且最近一片 confidence>0.8 → stop
+        （已找到目标，停后续省调用）；某片 confidence 0.6-0.8 灰色地带 →
+        deep_dive（二次验证深挖）；其余 continue。可通过 strip_seek_requested
+        同款机制把决策投到 agent_dialog（此处先简化只返回决策字符串）。
+        """
+        try:
+            hits_so_far = int(payload.get("hits_so_far", 0))
+            conf = float(payload.get("confidence", 0.0))
+            match = bool(payload.get("match"))
+            seg_idx = payload.get("seg_idx", -1)
+            if match and hits_so_far >= 2 and conf > 0.8:
+                logger.info(
+                    f"[batch] agent 决策 stop（命中 {hits_so_far} 片，"
+                    f"seg {seg_idx} conf={conf}）")
+                return "stop"
+            if not match and 0.6 <= conf < 0.8:
+                logger.info(
+                    f"[batch] agent 决策 deep_dive（seg {seg_idx} "
+                    f"灰色地带 conf={conf}）")
+                return "deep_dive"
+            return "continue"
+        except Exception:
+            return "continue"
         self.btn_start.setEnabled(_BATCH_RUNNER_AVAILABLE)
         self.btn_resume.setEnabled(_BATCH_RUNNER_AVAILABLE)
         self.btn_cancel.setEnabled(False)

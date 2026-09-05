@@ -120,6 +120,29 @@ class BatchConfig:
     # 才最终算命中。防止首次判断宽松导致的误判（实测 _375/_388 曾误判）。
     confidence_threshold: float = 0.7
     enable_verification: bool = True  # 开关：可关闭二次验证（默认开）
+    # v5.8：UI 画面变化档位（断点 B6）。百分比 0-100，映射到 motion_detector
+    # 的 day/night_threshold。默认 20 保持现有行为（day=15/night=6）。
+    # _collect_config 已收此字段进 dict（batch_tab.py:339），现真正接入 BatchConfig。
+    frame_change_pct: int = 20
+
+
+# 画面变化档位百分比 → (day_threshold, night_threshold) 映射表（断点 B6）
+# 帧差分均值 0-255，百分比越低越敏感（5%=几乎任何变化都触发，50%=只大件物品）。
+# 默认 20% 保持 v5.7 行为（day=15/night=6），零回归。模块级函数，dataclass 外。
+_FRAME_CHANGE_PCT_TO_THRESHOLDS: Dict[int, Tuple[float, float]] = {
+    5: (5.0, 3.0),    # 敏感：光线微变也触发
+    10: (10.0, 5.0),
+    20: (15.0, 6.0),  # 标准（v5.7 默认）
+    30: (25.0, 10.0),
+    50: (40.0, 20.0),  # 宽松：只大件物品出现才触发
+}
+
+
+def frame_change_pct_to_thresholds(pct: int) -> Tuple[float, float]:
+    """百分比→(day, night) 阈值。未知档位回退 20% 默认（15.0, 6.0）。"""
+    return _FRAME_CHANGE_PCT_TO_THRESHOLDS.get(pct, (15.0, 6.0))
+
+
 
 
 # ----------------------------------------------------------------------
@@ -152,18 +175,26 @@ class BatchRunner(QObject):
     error = pyqtSignal(str)
 
     def __init__(self, config: BatchConfig, run_store: Any,
-                 router: Any, parent: Optional[QObject] = None):
+                 router: Any, parent: Optional[QObject] = None,
+                 on_segment_judged: Optional[Any] = None):
         """
         Args:
             config: BatchConfig
             run_store: RunStore 实例（写 runs/segments/clips）
             router: ProviderRouter 实例（多 key 轮换 + 限速 + 无限重试）
             parent: QObject 父（可选）
+            on_segment_judged: v5.8 断点 B2 每轮介入回调。每个分片判断完调它，
+                传入 {run_id, seg_idx, match, confidence, reason, video_name,
+                hits_so_far}，返回 "continue"/"stop"/"deep_dive"。
+                stop → 设 _cancel_flag（只停当前视频）；deep_dive → 对该 seg
+                再送一次 _verify_segment。None 时不介入（保持旧行为）。
         """
         super().__init__(parent)
         self.config = config
         self.run_store = run_store
         self.router = router
+        # v5.8 断点 B2：每轮介入回调（agent 决策 continue/stop/deep_dive）
+        self._on_segment_judged = on_segment_judged
         self._cancel_flag = False
         self._hits_meta: List[Dict[str, Any]] = []  # 命中详情内存（供 MD 报告）
         self._ffmpeg = _find_ffmpeg()
@@ -173,15 +204,47 @@ class BatchRunner(QObject):
         self._key_item_b64: Optional[str] = self._encode_key_item(config.key_item_image)
         self._out_dir = Path(config.out_dir)
         self._out_dir.mkdir(parents=True, exist_ok=True)
+        # v5.8 断点 B1：per-model 视频分片配置（不再硬编码 120/720/2/256）。
+        # nvidia_models.get_video_config 按 config.model 动态返回，未知模型回退默认。
+        # _segment_video 的 ffmpeg 命令改用 self._video_cfg["target_height"] 等。
+        try:
+            from src.core.nvidia_models import get_video_config
+            self._video_cfg: Dict[str, Any] = get_video_config(config.model)
+        except Exception as e:
+            logger.warning(
+                f"[batch] get_video_config 失败，回退默认 {e}："
+                f"{{'max_segment_sec':120,'target_height':720,'target_fps':2,'max_frames':256}}")
+            self._video_cfg = {
+                "max_segment_sec": NVIDIA_MAX_SEGMENT_SEC,
+                "target_height": NVIDIA_TARGET_HEIGHT,
+                "target_fps": NVIDIA_TARGET_FPS,
+                "max_frames": NVIDIA_MAX_FRAMES,
+                "max_video_mb": 200,
+            }
+        # v5.8 断点 B6：UI 画面变化档位映射到 motion_detector 昼夜阈值。
+        # _collect_config 已收 frame_change_pct，现接入 MotionConfig 构造。
+        day_t, night_t = frame_change_pct_to_thresholds(
+            getattr(config, "frame_change_pct", 20))
         # M1：变化检测器配置（昼夜自适应 + context padding）
         # 复用 BatchConfig 的 clip_padding 作为 MotionConfig.context_padding，
         # 保持两个 padding 语义一致（命中裁剪余量 = 变化时段上下文余量）。
         # v5.7：frame_out_dir 在 _segment_video 按视频填（run_id 按视频不同）。
+        # v5.8：max_segment_sec 用 per-model 配置（断点 B1），用户显式 segment_sec
+        # 覆盖优先（若非默认 120 则尊重用户）。day/night_threshold 用档位映射（断点 B6）。
+        user_seg_sec = getattr(config, "segment_sec", NVIDIA_MAX_SEGMENT_SEC)
+        seg_sec = (int(user_seg_sec) if user_seg_sec != NVIDIA_MAX_SEGMENT_SEC
+                   else int(self._video_cfg.get("max_segment_sec", NVIDIA_MAX_SEGMENT_SEC)))
         self._motion_config = MotionConfig(
             sample_fps=config.fps_sample,
             context_padding=config.clip_padding,
-            max_segment_sec=config.segment_sec,
+            max_segment_sec=seg_sec,
+            day_threshold=day_t,
+            night_threshold=night_t,
         )
+        logger.info(
+            f"[batch] 模型 {config.model} 分片配置: {self._video_cfg} | "
+            f"画面变化档位 {getattr(config, 'frame_change_pct', 20)}% → "
+            f"day={day_t} night={night_t} | segment_sec={seg_sec}")
 
     # ------------------------------------------------------------------
     # 主入口
@@ -341,6 +404,57 @@ class BatchRunner(QObject):
                 match_flag = bool(results[idx] and results[idx].get("match"))
                 conf = float(results[idx].get("confidence", 0.0)) if results[idx] else 0.0
                 self.segment_done.emit(run_id, idx, match_flag, conf)
+                # v5.8 断点 B2：每轮介入回调（agent 决策 continue/stop/deep_dive）
+                # stop → 设 _cancel_flag（只停当前视频，当前分片已跑完）；
+                # deep_dive → 对该 seg 再送一次 _verify_segment（更严格 prompt）；
+                # continue / None → 走原逻辑。
+                if self._on_segment_judged is not None:
+                    try:
+                        decision = self._on_segment_judged({
+                            "run_id": run_id,
+                            "seg_idx": idx,
+                            "match": match_flag,
+                            "confidence": conf,
+                            "reason": (results[idx].get("reason", "")
+                                       if results[idx] else ""),
+                            "video_name": video.name,
+                            "hits_so_far": hits,
+                        })
+                    except Exception as cb_e:
+                        logger.warning(
+                            f"[batch] on_segment_judged 回调异常（忽略）: {cb_e}")
+                        decision = "continue"
+                    if decision == "stop":
+                        logger.info(
+                            f"[batch] agent 决策 stop（{video.name} seg {idx} "
+                            f"match={match_flag} conf={conf}），停后续分片")
+                        self._cancel_flag = True
+                    elif decision == "deep_dive" and not match_flag:
+                        # 对该分片深挖：再送一次严格验证（复用 _verify_segment）
+                        logger.info(
+                            f"[batch] agent 决策 deep_dive（{video.name} "
+                            f"seg {idx}），二次验证")
+                        try:
+                            dv = self._verify_segment(
+                                seg_paths[idx],
+                                (results[idx].get("reason", "")
+                                 if results[idx] else ""))
+                            if dv.get("has_target_item"):
+                                results[idx] = results[idx] or {}
+                                results[idx]["match"] = True
+                                results[idx]["confidence"] = float(
+                                    dv.get("confidence", conf))
+                                results[idx]["reason"] = (
+                                    f"[agent deep_dive] "
+                                    f"{dv.get('description', '')}")
+                                self._cut_and_record_clip(
+                                    run_id, video, seg_starts[idx], idx,
+                                    results[idx]["confidence"],
+                                    results[idx]["reason"])
+                                hits += 1
+                        except Exception as dv_e:
+                            logger.warning(
+                                f"[batch] deep_dive 二次验证异常: {dv_e}")
                 seg_ok += 1
                 self.run_store.update_run(
                     run_id, segments_ok=seg_ok,
@@ -448,18 +562,22 @@ class BatchRunner(QObject):
         paths: List[Path] = []
         starts: List[float] = []
         durs: List[float] = []
+        # v5.8 断点 B1：per-model 分片参数（不再硬编码 NVIDIA_TARGET_HEIGHT/FPS/MAX_FRAMES）
+        target_height = int(self._video_cfg.get("target_height", NVIDIA_TARGET_HEIGHT))
+        target_fps = int(self._video_cfg.get("target_fps", NVIDIA_TARGET_FPS))
+        max_frames_cap = int(self._video_cfg.get("max_frames", NVIDIA_MAX_FRAMES))
         for i, seg in enumerate(segments):
             out = seg_dir / f"seg_{i:04d}.mp4"
             if not out.exists() and not self._cancel_flag:
-                # ffmpeg：-ss 在 -i 前是 fast seek，-an 弃音频，scale 到 720p，
-                # fps=2 对齐 NVIDIA 2fps/256 帧上限，libx264 编码
-                # NVIDIA_MAX_FRAMES 上限：2fps × min(seg_dur, 120s)
-                max_frames = min(NVIDIA_MAX_FRAMES,
-                                  int(seg.duration * NVIDIA_TARGET_FPS))
+                # ffmpeg：-ss 在 -i 前是 fast seek，-an 弃音频，scale 到 target_height，
+                # fps=target_fps 对齐模型帧率上限，libx264 编码
+                # max_frames 上限：target_fps × min(seg_dur, max_segment_sec)
+                max_frames = min(max_frames_cap,
+                                  int(seg.duration * target_fps))
                 cmd = [self._ffmpeg, "-y", "-ss", f"{seg.start_sec:.2f}",
                        "-t", f"{seg.duration:.2f}", "-i", str(video),
                        "-an",
-                       "-vf", f"scale=-2:{NVIDIA_TARGET_HEIGHT},fps={NVIDIA_TARGET_FPS}",
+                       "-vf", f"scale=-2:{target_height},fps={target_fps}",
                        "-frames:v", str(max_frames),
                        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
                        "-movflags", "+faststart", str(out)]

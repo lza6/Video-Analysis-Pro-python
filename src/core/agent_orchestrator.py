@@ -18,7 +18,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from src.core.agent_prompt import build_system_prompt, match_skills
 
@@ -336,6 +336,119 @@ class AgentOrchestrator:
             return {"ok": False, "integrity_ok": False, "path": "",
                     "error": str(e)}
 
+    # ------------------------------------------------------------------ 跨会话记忆
+
+    def load_session_memory(self, run_store, limit_runs: int = 5,
+                            limit_hits: int = 10) -> dict:
+        """跨会话记忆层（断点 B4 / 改进项 I5.8-agent-4）。
+
+        读 run_store 历史命中 + 未完成 run，返回结构化记忆 dict，让 agent 重启
+        时知道"之前跑到哪 / 命中过什么"，用于续跑点提示与上下文注入。
+
+        参数：
+          run_store      — src.core.run_store.RunStore 实例（或同等协议对象）
+          limit_runs     — 最近未完成 run / 命中采样时的 run 数上限
+          limit_hits     — 最近命中条数上限
+
+        返回 dict：
+          {
+            "unfinished_count":   int,     # status=started/running 的 run 数
+            "unfinished_videos":  [str],   # 最近 limit_runs 个未完成视频名
+            "recent_hits":        [dict],  # 最近 limit_hits 个命中（每条含
+                                           #  video_name/timestamp/confidence/reason）
+            "total_runs":         int,
+            "total_hits":         int,
+          }
+
+        空库或异常返回全 0 / 空列表，绝不崩（agent 启动期不能因记忆层报错中断）。
+        """
+        empty: dict = {
+            "unfinished_count": 0,
+            "unfinished_videos": [],
+            "recent_hits": [],
+            "total_runs": 0,
+            "total_hits": 0,
+        }
+        if run_store is None:
+            return empty
+
+        try:
+            # list_runs 只接受单 status，调两次合并 started + running
+            started = run_store.list_runs(limit=limit_runs, status="started")
+            running = run_store.list_runs(limit=limit_runs, status="running")
+            unfinished = list(started) + list(running)
+            # 去重（理论上不会重叠，防御性）
+            seen: set[str] = set()
+            unfinished_unique: List[Dict[str, Any]] = []
+            for r in unfinished:
+                rid = r.get("run_id") or ""
+                if rid in seen:
+                    continue
+                seen.add(rid)
+                unfinished_unique.append(r)
+
+            unfinished_videos: List[str] = [
+                r.get("video_name") or r.get("video_path") or ""
+                for r in unfinished_unique[:limit_runs]
+            ]
+
+            # 总数统计：取一个大 limit 取全量后数（run_store 无 count 方法）
+            big = run_store.list_runs(limit=100000)
+            total_runs = len(big)
+            total_hits = sum(int(r.get("hits_count") or 0) for r in big)
+
+            # 最近命中：遍历最近 limit_runs*3 个 run 的 clips
+            scan_runs = run_store.list_runs(limit=max(limit_runs * 3, limit_runs))
+            recent_hits: List[Dict[str, Any]] = []
+            for r in scan_runs:
+                rid = r.get("run_id") or ""
+                if not rid:
+                    continue
+                run_detail = run_store.get_run(rid)
+                if not run_detail:
+                    continue
+                video_name = (run_detail.get("video_name")
+                              or run_detail.get("video_path") or "")
+                clips = run_detail.get("clips") or []
+                segments = run_detail.get("segments") or []
+                # 取命中的 segment（match=1）做 confidence/reason 关联
+                hit_segs = [s for s in segments if s.get("match") == 1]
+                for clip in clips:
+                    hit_idx = clip.get("hit_idx")
+                    # 关联同 hit_idx 的 segment（若存在）
+                    seg_match: Optional[Dict[str, Any]] = None
+                    if hit_idx is not None:
+                        for s in hit_segs:
+                            if s.get("seg_idx") == hit_idx:
+                                seg_match = s
+                                break
+                    if seg_match is None and hit_segs:
+                        # 回退：取首个命中 segment（clips 与 seg 不一定严格对齐）
+                        seg_match = hit_segs[0]
+                    recent_hits.append({
+                        "video_name": video_name,
+                        "timestamp": clip.get("abs_timestamp") or "",
+                        "confidence": (seg_match.get("confidence")
+                                       if seg_match else None),
+                        "reason": (seg_match.get("reason")
+                                   if seg_match else None),
+                    })
+                    if len(recent_hits) >= limit_hits:
+                        break
+                if len(recent_hits) >= limit_hits:
+                    break
+
+            return {
+                "unfinished_count": len(unfinished_unique),
+                "unfinished_videos": unfinished_videos,
+                "recent_hits": recent_hits,
+                "total_runs": total_runs,
+                "total_hits": total_hits,
+            }
+        except Exception as e:
+            logger.warning("load_session_memory 读取失败，返回空记忆: %s", e)
+            return empty
+
     # ------------------------------------------------------------------ 内部
 
     def _format_reply(self, intent: Intent, skill_name: Optional[str],
@@ -373,6 +486,57 @@ class AgentOrchestrator:
 
 
 # ------------------------------------------------------------------ 构建系统提示（供 main_window 复用）
+
+def format_memory_text(memory: dict) -> str:
+    """把 load_session_memory 返回的结构化记忆转成人类可读文本（≤500 字）。
+
+    用于 agent 启动时注入 system prompt / 对话首条提示，让用户看到"上次跑到哪"。
+    长度受控（避免污染上下文），无历史时返回首次使用提示。
+
+    格式示例：
+      📌 上次会话记忆：
+      - 2 个视频未跑完（续跑点「继续未完成」）
+      - 上次命中：`cam01.mp4` 第 2026-09-04T10:00:30 秒（置信度 0.88）
+      - 共跑过 5 个视频，命中 3 次
+    """
+    if not memory:
+        return "📌 首次使用，无历史记忆。"
+
+    unfinished = int(memory.get("unfinished_count") or 0)
+    total_runs = int(memory.get("total_runs") or 0)
+    total_hits = int(memory.get("total_hits") or 0)
+    recent_hits = memory.get("recent_hits") or []
+
+    if total_runs == 0 and not recent_hits:
+        return "📌 首次使用，无历史记忆。"
+
+    lines: List[str] = ["📌 上次会话记忆："]
+    if unfinished > 0:
+        lines.append(
+            f"- {unfinished} 个视频未跑完"
+            "（续跑点「继续未完成」）"
+        )
+    else:
+        lines.append("- 上次会话的视频已全部跑完")
+
+    if recent_hits:
+        h = recent_hits[0]
+        video = h.get("video_name") or "未知视频"
+        ts = h.get("timestamp") or "未知时间"
+        conf = h.get("confidence")
+        conf_str = f"（置信度 {conf}）" if conf is not None else ""
+        lines.append(f"- 上次命中：`{video}` 第 {ts} 秒{conf_str}")
+    else:
+        lines.append("- 上次无命中记录")
+
+    lines.append(f"- 共跑过 {total_runs} 个视频，命中 {total_hits} 次")
+
+    text = "\n".join(lines)
+    # 硬截断到 500 字，防异常大库污染上下文
+    if len(text) > 500:
+        text = text[:497] + "..."
+    return text
+
 
 def build_agent_system_prompt(tool_descriptions: str = "",
                               context: Optional[str] = None,

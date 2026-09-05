@@ -1,5 +1,48 @@
 # Changelog — Video Analysis Pro
 
+## [5.8.1] — 2026-09-05 · 接通 7 个已实现未接通断点（B1–B7，指南 v6.0 路线）
+
+### 🎯 核心：闭环《计划书/下一步改进指南.md》v5.8 全部断点
+
+指南把 v6.0 路线拆成 7 个"已实现未接通"断点（代码写好但调用方没接上）。
+v5.8.1 一次性全部接通，agent 真正成为对话驱动自主代理。
+
+### 断点闭环清单
+
+| # | 断点 | 改动 | 文件 |
+|---|------|------|------|
+| **B7** 🔴 P0 | `_collect_config` 返回 dict 但 BatchRunner 期望 BatchConfig，点"开始批量"必崩 | `_build_runner` 做 `BatchConfig(**dict)` 转换 + 未知字段兜底过滤 | batch_tab.py |
+| **B1** | batch_runner 硬编码 120/720/2/256，不调 nvidia_models.get_video_config | `__init__` 调 `get_video_config(config.model)` 存 `_video_cfg`，`_segment_video` ffmpeg 用 per-model 参数 | batch_runner.py |
+| **B6** | UI 画面变化档位是装饰品（BatchConfig 无 frame_change_pct 字段） | BatchConfig 加 `frame_change_pct: int=20` + `frame_change_pct_to_thresholds()` 映射表（5%/10%/20%/30%/50% → day/night 阈值），MotionConfig 用映射值 | batch_runner.py |
+| **B2** | batch_runner._judge_segment 跑完不回调 agent | BatchRunner 加 `on_segment_judged` 回调参数，每片判断完调它返回 stop/deep_dive/continue；batch_tab._agent_decide_segment 规则（命中≥2且conf>0.8→stop，灰色地带→deep_dive） | batch_runner.py, batch_tab.py |
+| **B4** | agent 启动不读 run_store 历史 | `AgentOrchestrator.load_session_memory(run_store)` + `format_memory_text()`，main_window 启动 QTimer 调一次注入 agent_dialog | agent_orchestrator.py, main_window.py |
+| **B3** | configure_provider_dialog/download_model_dialog 在 orchestrator 已实现但 main_window 接空壳 | 新建 `provider_config_dialog.py`（两阶段对话式：填表→测活性→入密钥环），download_model 真调 orchestrator + QProgressDialog + SHA256 校验结果 | provider_config_dialog.py, main_window.py |
+| **B5** | SURVEILLANCE intent 的 plan 工具未在 ToolRegistry 注册 | 新增 `create_scan_videos_tool` / `create_batch_analyze_trigger_tool` / `create_summarize_hits_tool` 三个桥接工具 + main_window.start_batch（预填配置+切 tab，真跑付费 API 由用户确认） | agent_tools.py, main_window.py |
+| **router-1/2** | 503 退避/每key并发硬编码 | `ProviderRouter.__init__` 加 backoff_sec/same_key_retries 参数 + `load_router_config_from_env()` 读 .env | provider_router.py, batch_tab.py |
+
+### 🔧 改动文件
+- `src/core/batch_runner.py`：B1 per-model 配置 + B6 frame_change_pct 字段+映射 + B2 on_segment_judged 回调
+- `src/core/agent_orchestrator.py`：B4 load_session_memory + format_memory_text
+- `src/core/agent_tools.py`：B5 scan_videos/batch_analyze/summarize_hits 三个桥接工具
+- `src/core/provider_router.py`：router-1/2 参数化 + load_router_config_from_env
+- `src/ui/batch_tab.py`：B7 dict→BatchConfig 转换 + B2 _agent_decide_segment + router 配置接线
+- `src/ui/main_window.py`：B3 真接通 provider/download dialog + B4 启动记忆 + B5 三个工具注册 + start_batch
+- `src/ui/provider_config_dialog.py`（新）：对话式配 key 弹窗（测活性+入密钥环）
+- `tests/test_v58_breakpoints.py`（新）：6 断点单测
+- `tests/test_agent_orchestrator_memory.py`（新）：记忆层 8 单测
+- `tests/test_router_config.py`（新）：router 参数化 16 单测
+- `.env.example`：补 VAP_NV_BACKOFF_SEC/RETRIES/MAX_CONCURRENT_PER_KEY
+
+### 🧪 验证
+- pyflakes：所有改/新文件零告警（除预存在 logic.py/surveillance_tab.py 的 unused import，非本次引入）。
+- 单测：`test_v58_breakpoints`(6) + `test_agent_orchestrator_memory`(8) + `test_frame_strip`(5) + `test_agent_tools` + `test_core_pipeline` = 36 passed。
+- router 单测：`test_provider_router` + `test_router_config` = 64 passed。
+- E2E：`load_session_memory` + `format_memory_text` 真实 RunStore 验证（空库→"首次使用"，running run→"1 个视频未跑完"）✅。
+- B7 根因验证：`BatchConfig(**_collect_config_dict)` 不再 AttributeError ✅。
+
+### ⚠️ 付费 API 红线
+B5 的 batch_analyze 工具只触发 `main_window.start_batch`（预填配置+切 tab），**不真跑付费 API**——真跑由用户在批量 tab 点「▶ 开始批量」确认（破坏性操作先问）。符合付费 API 红线铁则。
+
 ## [5.8.0] — 2026-09-05 · NVIDIA Integrate 内置提供商接入 UI（客户端类型 + 自动加载 .env + 批量 router）
 
 ### 🎯 核心问题

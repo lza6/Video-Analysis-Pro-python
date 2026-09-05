@@ -566,6 +566,9 @@ class DesktopApp(QMainWindow):
         # Trigger Startup Scan & Self-Healing
         QTimer.singleShot(500, self.run_startup_scan)
         QTimer.singleShot(1000, self.check_ffmpeg)
+        # v5.8 断点 B4：跨会话记忆层——启动后调 orchestrator.load_session_memory
+        # 读 run_store 历史命中 + 未完成 run，注入 agent 对话作为系统消息。
+        QTimer.singleShot(1500, self._load_agent_session_memory)
         
         # Thread Pool for Image Loading
         self.image_pool = QThreadPool()
@@ -1447,31 +1450,134 @@ class DesktopApp(QMainWindow):
         self.agent_dialog.append_thoughts(f"用户切换工具: {tool_id}")
 
     def on_agent_dialog_config_provider(self):
-        """愿景5：agent 引导用户配 provider/key（对话式 + 测活性 + 入库）。"""
-        # 切到传统功能 tab 的模型配置区，让用户填表
-        self.agent_dialog.stacked.setCurrentIndex(1)  # legacy_tabs 页
-        self.tabs.setCurrentWidget(self.tab_api_help)
-        self.agent_dialog.append_agent_message(
-            "我来帮你配 Provider。\n"
-            "1. 在左侧选客户端类型（Ollama/API/LM Studio）\n"
-            "2. 填 API URL + Key（Key 存系统密钥环，不入库）\n"
-            "3. 点「检测连接」我帮你测活性\n"
-            "4. 选模型 → 加载 → 完成"
-        )
+        """愿景5：agent 引导用户配 provider/key（对话式 + 测活性 + 入库）。
+
+        v5.8 断点 B3 真接通：之前只切 tab + 贴引导文案，没真调
+        orchestrator.configure_provider_dialog（测活性）+ 入密钥环。
+        现弹轻量 ProviderConfigDialog，用户填完点「测活性」→ 真调
+        orchestrator.configure_provider_dialog → 成功入密钥环 + 回 agent 消息。
+        """
+        try:
+            from src.ui.provider_config_dialog import ProviderConfigDialog
+        except Exception as e:
+            logging.warning(f"[main_window] provider_config_dialog 不可用: {e}")
+            # 兜底：切到传统 tab 让用户手填（旧行为）
+            self.agent_dialog.stacked.setCurrentIndex(1)
+            self.tabs.setCurrentWidget(self.tab_api_help)
+            self.agent_dialog.append_agent_message(
+                "我来帮你配 Provider。\n"
+                "1. 在左侧选客户端类型（Ollama/API/LM Studio/NVIDIA Integrate）\n"
+                "2. 填 API URL + Key（Key 存系统密钥环，不入库）\n"
+                "3. 点「检测连接」我帮你测活性\n"
+                "4. 选模型 → 加载 → 完成"
+            )
+            return
+        dlg = ProviderConfigDialog(self, self._agent_orchestrator,
+                                   self.config_manager)
+        # 成功入库后回 agent 消息 + 同步到主模型配置 UI
+        dlg.saved.connect(self._on_provider_configured)
+        dlg.exec()
+
+    def _on_provider_configured(self, result: dict) -> None:
+        """provider 配置 dialog 成功入库回调 → 回 agent 消息 + 同步 UI。"""
+        if not isinstance(result, dict):
+            return
+        ok = result.get("ok")
+        guide = result.get("guide", "")
+        self.agent_dialog.append_agent_message(guide)
+        if ok:
+            # 同步到主模型配置 UI（让用户点「加载」即可用）
+            try:
+                url = result.get("api_url", "")
+                key = result.get("api_key", "")
+                model = result.get("model", "")
+                if url:
+                    self.txt_api_url.setPlainText(url)
+                if key:
+                    self.txt_api_key.setPlainText(key)
+                if model:
+                    self.combo_api_model.setEditText(model)
+                self.sync_agent_models()
+            except Exception as e:
+                logging.debug(f"[main_window] 同步 provider 配置到 UI 失败: {e}")
 
     def on_agent_dialog_download_model(self, model_id: str):
-        """愿景6：agent 帮下模型（接 ModelManagerTab + SHA256 校验）。"""
-        # 切到模型管理工具页（在 AgentDialog 工具箱里）
+        """愿景6：agent 帮下模型（接 ModelManagerTab + SHA256 校验）。
+
+        v5.8 断点 B3 真接通：之前只切 tab + 贴文案，没真调
+        orchestrator.download_model_dialog（ModelManager + SHA256）。
+        现真调，下载进度接 QProgressDialog，SHA256 校验结果回 agent 消息。
+        """
+        orch = self._agent_orchestrator
+        if orch is None:
+            self.agent_dialog.append_agent_message("⚠️ Agent 未初始化，无法下载模型。")
+            return
+        self.agent_dialog.append_agent_message(
+            f"我来帮你下载模型 {model_id}，下载完自动跑 SHA256 校验（防篡改）…")
+        # 切到模型管理工具页让用户看进度
         for i in range(self.agent_dialog.stacked.count()):
             w = self.agent_dialog.stacked.widget(i)
             if w is self.tab_models:
                 self.agent_dialog.stacked.setCurrentIndex(i)
                 break
-        self.agent_dialog.append_agent_message(
-            f"我来帮你下载模型 {model_id}。\n"
-            "下载完成后自动跑 SHA256 校验（防篡改）。\n"
-            "在右侧模型管理面板点对应卡片「📥 下载」即可。"
-        )
+        # 真调 orchestrator.download_model_dialog（后台线程跑，避免阻塞 UI）
+        from PyQt6.QtCore import QThread, pyqtSignal as _sig
+
+        class _DLWorker(QThread):
+            done = _sig(dict)
+
+            def __init__(self, orch, mid, mm):
+                super().__init__()
+                self._orch = orch
+                self._mid = mid
+                self._mm = mm
+
+            def run(self):
+                try:
+                    r = self._orch.download_model_dialog(self._mid, self._mm)
+                    self.done.emit(r if isinstance(r, dict) else {})
+                except Exception as e:
+                    self.done.emit({"ok": False, "integrity_ok": False,
+                                    "path": "", "error": str(e)})
+
+        mm = getattr(self, 'model_manager', None)
+        if mm is None:
+            self.agent_dialog.append_agent_message(
+                "⚠️ ModelManager 未初始化（模型管理 tab 未加载），无法下载。")
+            return
+        from PyQt6.QtWidgets import QProgressDialog
+        prog = QProgressDialog(f"正在下载 {model_id}…", "取消", 0, 0, self)
+        prog.setWindowTitle("模型下载")
+        prog.setMinimumDuration(0)
+        prog.setModal(True)
+
+        worker = _DLWorker(orch, model_id, mm)
+        worker.done.connect(lambda r: prog.close() or self._on_model_downloaded(r, model_id))
+        worker.start()
+
+    def _on_model_downloaded(self, result: dict, model_id: str) -> None:
+        """模型下载 + SHA256 校验结果 → 回 agent 消息（失败弹警告）。"""
+        if not isinstance(result, dict):
+            return
+        ok = result.get("ok")
+        integ = result.get("integrity_ok")
+        path = result.get("path", "")
+        err = result.get("error", "")
+        if ok and integ:
+            self.agent_dialog.append_agent_message(
+                f"✅ 模型 {model_id} 已下载，SHA256 校验通过。\n路径：{path}")
+        elif ok and not integ:
+            # 校验失败：可能被篡改，提示删除重下
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                self, "模型校验失败",
+                f"模型 {model_id} 下载完成但 SHA256 校验未通过，\n"
+                f"文件可能被篡改，已删除，请重新下载。")
+            self.agent_dialog.append_agent_message(
+                f"⚠️ 模型 {model_id} SHA256 校验失败，可能被篡改，请重新下载。")
+        else:
+            self.agent_dialog.append_agent_message(
+                f"❌ 模型 {model_id} 下载失败：{err}")
 
     def _on_agent_step_done(self, step):
         """orchestrator 每步完成回调 → 显示到对话（愿景4：每步可追溯）。"""
@@ -2165,6 +2271,60 @@ class DesktopApp(QMainWindow):
             create_kb_search_tool(context_provider),
             {"query": "画面描述"}
         )
+        # v5.8 断点 B5：SURVEILLANCE intent 真实触发 batch_runner 的三个桥接工具。
+        # scan_videos 同步扫目录；batch_analyze 异步触发 start_batch（不真跑付费 API，
+        # 只起 BatchRunner + 切到批量 tab，真跑由用户在批量 tab 点确认）；
+        # summarize_hits 读 run_store 返回命中汇总。
+        from src.core.agent_tools import (
+            create_scan_videos_tool, create_batch_analyze_trigger_tool,
+            create_summarize_hits_tool)
+        self.tool_registry.register_tool(
+            "scan_videos",
+            "Scan a directory for surveillance video files. "
+            "Args: {'video_dir': '目录路径'}",
+            create_scan_videos_tool(context_provider),
+            {"video_dir": "D:/监控/"}
+        )
+        self.tool_registry.register_tool(
+            "batch_analyze",
+            "Trigger batch surveillance analysis for a video directory. "
+            "Returns immediately with a confirmation; progress is shown in the "
+            "batch tab. Args: {'video_dir': '目录路径', 'item_description': '找什么'}",
+            create_batch_analyze_trigger_tool(context_provider),
+            {"video_dir": "D:/监控/", "item_description": "黑色旅行袋"}
+        )
+        self.tool_registry.register_tool(
+            "summarize_hits",
+            "Summarize all hit clips from previous runs (cross-session memory). "
+            "Args: {}",
+            create_summarize_hits_tool(context_provider),
+            {}
+        )
+
+    def _load_agent_session_memory(self) -> None:
+        """v5.8 断点 B4：启动后读 run_store 历史 → 注入 agent 对话。
+
+        agent_orchestrator.load_session_memory 读未完成 run + 最近命中，
+        format_memory_text 转人类可读文本，作为系统消息投到 agent_dialog。
+        用户重启即知"之前跑到哪/命中过什么"。
+        """
+        try:
+            orch = getattr(self, '_agent_orchestrator', None)
+            if orch is None or not hasattr(orch, 'load_session_memory'):
+                return
+            run_store = None
+            tab_batch = getattr(self, 'tab_batch', None)
+            if tab_batch is not None and hasattr(tab_batch, '_run_store'):
+                run_store = tab_batch._run_store
+            if run_store is None:
+                return  # 批量 tab 未接入，静默跳过
+            from src.core.agent_orchestrator import format_memory_text
+            memory = orch.load_session_memory(run_store)
+            text = format_memory_text(memory)
+            if text and text.strip():
+                self.agent_dialog.append_agent_message(text)
+        except Exception as e:
+            logging.debug(f"[main_window] 加载会话记忆失败: {e}")
 
     def seek_video(self, ts):
         """Unified jump method for Agent tools (used by point_and_jump).
@@ -2173,6 +2333,38 @@ class DesktopApp(QMainWindow):
         """
         logging.info(f"Agent requested jump to {ts}s")
         QTimer.singleShot(0, lambda: self._seek_video_main(ts))
+
+    def start_batch(self, video_dir: str, item_description: str = "") -> str:
+        """v5.8 断点 B5：agent 工具 batch_analyze 触发 → 起 BatchRunner。
+
+        不在此真跑付费 API（红线）：只构造 BatchConfig + 切到批量监控 tab +
+        预填配置，真跑由用户在批量 tab 点「开始批量」确认（破坏性操作先问）。
+        返回给 agent 的文本，说明已就绪待确认。
+        """
+        try:
+            from pathlib import Path
+            if not video_dir or not Path(video_dir).exists():
+                return f"❌ 视频目录不存在：{video_dir}"
+            # 预填批量 tab 配置
+            if hasattr(self, 'tab_batch') and self.tab_batch is not None:
+                if hasattr(self.tab_batch, 'txt_video_dir'):
+                    self.tab_batch.txt_video_dir.setText(video_dir)
+                if (hasattr(self.tab_batch, 'txt_item_desc')
+                        and item_description):
+                    self.tab_batch.txt_item_desc.setText(item_description)
+                # 切到批量监控工具页
+                if hasattr(self, 'agent_dialog'):
+                    for i in range(self.agent_dialog.stacked.count()):
+                        w = self.agent_dialog.stacked.widget(i)
+                        if w is getattr(self, 'tab_batch', None):
+                            self.agent_dialog.stacked.setCurrentIndex(i)
+                            break
+            return (f"✅ 已就绪：视频目录 {video_dir}，查找「{item_description}」。"
+                    f"请在「🎞 批量监控」tab 核对配置后点「▶ 开始批量」启动真实分析。"
+                    f"（付费 API 需你确认后才会真跑）")
+        except Exception as e:
+            logging.warning(f"[main_window] start_batch 失败: {e}")
+            return f"❌ 启动失败：{e}"
 
     def _seek_video_main(self, ts):
         """主线程执行的实际跳转。"""

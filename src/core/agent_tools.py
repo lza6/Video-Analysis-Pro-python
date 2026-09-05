@@ -414,3 +414,91 @@ def create_image_search_tool(app_context_getter):
         except Exception as e:
             return f"Image search error: {e}"
     return search_by_image
+
+
+# --- v5.8 断点 B5：SURVEILLANCE intent 桥接工具（真触发 batch_runner）---
+# scan_videos 同步扫目录；batch_analyze 触发 main_window.start_batch（异步，
+# 真跑付费 API 由用户在批量 tab 确认）；summarize_hits 读 run_store 命中。
+
+# 支持的视频扩展名（与 batch_runner.SUPPORTED_VIDEO_EXTS 对齐）
+_VID_EXTS = (".mp4", ".avi", ".mov", ".mkv")
+
+
+def create_scan_videos_tool(app_context_getter):
+    """扫监控视频目录，返回视频列表（同步，轻量）。"""
+    def scan_videos(video_dir: str = ""):
+        from pathlib import Path
+        if not video_dir:
+            return "请提供 video_dir 参数。"
+        d = Path(video_dir)
+        if not d.exists() or not d.is_dir():
+            return f"目录不存在或非目录：{video_dir}"
+        vids = []
+        for p in sorted(d.iterdir()):
+            if p.is_file() and p.suffix.lower() in _VID_EXTS:
+                try:
+                    size_mb = p.stat().st_size / (1024 * 1024)
+                except OSError:
+                    size_mb = 0.0
+                vids.append(f"{p.name} ({size_mb:.1f} MB)")
+        if not vids:
+            return f"目录 {video_dir} 下无视频文件（支持 {_VID_EXTS}）。"
+        return f"找到 {len(vids)} 个视频：\n" + "\n".join(vids)
+    return scan_videos
+
+
+def create_batch_analyze_trigger_tool(app_context_getter):
+    """触发批量监控分析（异步，不真跑付费 API，只预填配置 + 切 tab 待确认）。
+
+    真实启动由用户在「🎞 批量监控」tab 点「▶ 开始批量」确认（破坏性操作先问）。
+    """
+    def trigger_batch(video_dir: str = "", item_description: str = ""):
+        app = app_context_getter()
+        if not app:
+            return "App context missing."
+        if not hasattr(app, 'start_batch'):
+            return "main_window 未实现 start_batch 方法，无法触发批量分析。"
+        return app.start_batch(video_dir, item_description)
+    return trigger_batch
+
+
+def create_summarize_hits_tool(app_context_getter):
+    """读 run_store 历史命中汇总（跨会话记忆，断点 B4 续）。"""
+    def summarize_hits():
+        app = app_context_getter()
+        if not app:
+            return "App context missing."
+        run_store = getattr(app, 'run_store_for_tools', None) or getattr(
+            app, 'history_manager', None)
+        # 优先用 batch_tab 的 run_store（runs.db）
+        tab_batch = getattr(app, 'tab_batch', None)
+        if tab_batch is not None and hasattr(tab_batch, '_run_store'):
+            run_store = tab_batch._run_store
+        if run_store is None or not hasattr(run_store, 'list_runs'):
+            return "RunStore 未接入，无法汇总历史命中。"
+        try:
+            runs = run_store.list_runs(limit=100)
+        except Exception as e:
+            return f"读取 run_store 失败：{e}"
+        if not runs:
+            return "无历史 run 记录。"
+        hits = []
+        for r in runs:
+            if not r.get('hits_count'):
+                continue
+            clips = []
+            try:
+                full = run_store.get_run(r.get('run_id', ''))
+                clips = full.get('clips') or [] if full else []
+            except Exception:
+                pass
+            for c in clips:
+                hits.append(
+                    f"- {r.get('video_name', '?')} | "
+                    f"{c.get('abs_timestamp', '?')} | "
+                    f"{c.get('clip_path', '?')}")
+        if not hits:
+            return f"共 {len(runs)} 个 run，无命中。"
+        return f"共 {len(runs)} 个 run，{len(hits)} 个命中：\n" + "\n".join(hits)
+    return summarize_hits
+
