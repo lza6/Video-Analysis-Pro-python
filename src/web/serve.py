@@ -171,6 +171,45 @@ def run_server(host: str | None = None, port: int | None = None,
     log.info(f"Video Analysis Pro Web UI: http://{probe_host}:{port}")
 
     import uvicorn
+
+    # uvicorn 默认日志走 stderr,PowerShell 会把它当 error stream 标红字
+    # (NativeCommandError 视觉污染,功能不受影响)。改走 stdout 后 .bat
+    # 控制台显示干净。access log 一并收进 stdout。
+    import logging as _lg
+    import sys as _sys
+    _log_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "default": {
+                "()": "uvicorn.logging.DefaultFormatter",
+                "fmt": "%(levelprefix)s %(message)s",
+                "use_colors": None,
+            },
+            "access": {
+                "()": "uvicorn.logging.AccessFormatter",
+                "fmt": '%(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s',
+            },
+        },
+        "handlers": {
+            "default": {
+                "class": "logging.StreamHandler",
+                "stream": _sys.stdout,  # 关键:stdout 而非默认 stderr
+                "formatter": "default",
+            },
+            "access": {
+                "class": "logging.StreamHandler",
+                "stream": _sys.stdout,
+                "formatter": "access",
+            },
+        },
+        "loggers": {
+            "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+            "uvicorn.error": {"level": "INFO"},
+            "uvicorn.access": {"handlers": ["access"], "level": "INFO", "propagate": False},
+        },
+    }
+
     try:
         uvicorn.run(
             "src.web.app:app",
@@ -178,6 +217,7 @@ def run_server(host: str | None = None, port: int | None = None,
             port=port,
             reload=reload,
             log_level="info",
+            log_config=_log_config,
         )
     except KeyboardInterrupt:
         log.info("收到中断信号,服务退出")
