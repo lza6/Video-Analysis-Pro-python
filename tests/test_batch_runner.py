@@ -373,3 +373,63 @@ class TestErrorHandling:
         runs = store.list_runs()
         run = store.get_run(runs[0]["run_id"])
         assert run["segments"][0]["status"] == "failed"
+
+
+# ----------------------------------------------------------------------
+# 6. v5.8 断点 B1/B2/B6：per-model 配置 / 档位映射 / 回调注入
+#     （test_v58_breakpoints.py 已有等价覆盖，这里补 batch_runner 自身
+#     fixture 视角的断言，不依赖 BatchTab UI 层）
+# ----------------------------------------------------------------------
+class TestV58BreakpointsBatchRunner:
+    def test_batch_config_frame_change_pct_field(self):
+        """B6：BatchConfig 有 frame_change_pct 字段，默认 20。
+
+        _make_config 默认不传 frame_change_pct，应回落默认 20（v5.7 行为）。
+        显式传 5 时为 5。
+        """
+        from src.core.batch_runner import BatchConfig
+        # 默认 20
+        cfg_default = BatchConfig(video_dir="x", key_item_image="")
+        assert cfg_default.frame_change_pct == 20
+        # 显式 5
+        cfg_sensitive = BatchConfig(video_dir="x", key_item_image="",
+                                     frame_change_pct=5)
+        assert cfg_sensitive.frame_change_pct == 5
+
+    def test_batch_config_video_cfg_loaded(self, tmp_path):
+        """B1：BatchRunner.__init__ 调 get_video_config（真实 omni id）。
+
+        断言 _video_cfg 来自 nvidia_models 注册表，含 omni 的 720p/2fps/256帧。
+        用 _make_config fixture 视角（不 mock get_video_config，走真实注册表）。
+        """
+        from src.core.nvidia_models import get_video_config
+        cfg = _make_config(tmp_path,
+                           model="nvidia/nemotron-3-nano-omni-30b-a3b-reasoning")
+        runner = BatchRunner(cfg, _make_store(tmp_path), _make_router())
+        # 真实注册表返回
+        expected = get_video_config(cfg.model)
+        assert runner._video_cfg["target_height"] == expected["target_height"]
+        assert runner._video_cfg["target_fps"] == expected["target_fps"]
+        assert runner._video_cfg["max_frames"] == expected["max_frames"]
+        # omni 硬约束：720p / 2fps / 256帧
+        assert runner._video_cfg["target_height"] == 720
+        assert runner._video_cfg["target_fps"] == 2
+        assert runner._video_cfg["max_frames"] == 256
+
+    def test_batch_runner_on_segment_judged_callback(self, tmp_path):
+        """B2：BatchRunner.__init__ 接受 on_segment_judged 回调并存为属性。
+
+        断言 _on_segment_judged 属性 = 传入的 callback（None 时为 None）。
+        不跑 run_batch（避免触发真实 AI 调用），只验证构造时属性注入。
+        """
+        def cb(payload):
+            return "continue"
+
+        cfg = _make_config(tmp_path)
+        runner = BatchRunner(cfg, _make_store(tmp_path), _make_router(),
+                             on_segment_judged=cb)
+        # 属性存了 callback
+        assert runner._on_segment_judged is cb
+        # 不传时默认 None（保持旧行为）
+        runner2 = BatchRunner(cfg, _make_store(tmp_path), _make_router())
+        assert runner2._on_segment_judged is None

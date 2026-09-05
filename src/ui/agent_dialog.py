@@ -82,6 +82,8 @@ class AgentDialog(QWidget):
         self._tool_items: list[_ToolBoxItem] = []
         self._last_bubble: Optional[ChatBubble] = None
         self._thoughts_buf: str = ""  # 思考链累积缓冲（append_thoughts 用）
+        # v6.0 5.1：多轮上下文（session 内），每次发消息带上历史
+        self._conversation_history: list[tuple[str, str]] = []  # [(role, text)]
         self._build_ui()
 
     # ------------------------------------------------------------------ UI
@@ -189,6 +191,36 @@ class AgentDialog(QWidget):
         input_row.addWidget(self.input_msg, stretch=1)
         input_row.addWidget(self.btn_send)
         v.addLayout(input_row)
+
+        # v6.0 5.1：快捷指令按钮（小白用户一键发常用指令）
+        quick_row = QHBoxLayout()
+        quick_row.setSpacing(4)
+        quick_lbl = QLabel("快捷:")
+        quick_lbl.setStyleSheet("color: #888; font-size: 10px;")
+        quick_row.addWidget(quick_lbl)
+        for cmd_text, placeholder in (
+            ("🎯 分析监控找包", "描述要找的物品（如：黑色旅行袋 白色提手）"),
+            ("🔑 配 key", "我有 NVIDIA/OpenAI key，帮我配置"),
+            ("📦 下模型", "帮我下载 yolo_v11n 模型"),
+            ("📝 视频摘要", "对当前视频生成摘要报告"),
+        ):
+            btn = QPushButton(cmd_text)
+            btn.setStyleSheet(
+                "background: #2a2a2a; color: #ddd; border: 1px solid #444; "
+                "border-radius: 10px; padding: 2px 8px; font-size: 11px;"
+            )
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            # 闭包捕获 placeholder（避免 lambda 延迟绑定只取最后一个）
+            def _fill(p=placeholder):
+                self.input_msg.setPlainText(p)
+                self.input_msg.setFocus()
+                self.input_msg.moveCursor(
+                    __import__("PyQt6.QtGui",
+                               fromlist=["QTextCursor"]).QTextCursor.MoveOperation.End)
+            btn.clicked.connect(_fill)
+            quick_row.addWidget(btn)
+        quick_row.addStretch(1)
+        v.addLayout(quick_row)
         return page
 
     # ------------------------------------------------------------------ 公开 API
@@ -207,15 +239,29 @@ class AgentDialog(QWidget):
         return index
 
     def append_user_message(self, text: str) -> None:
+        # v6.0 5.1：多轮上下文——记用户消息进历史
+        self._conversation_history.append(("user", text))
         bubble = ChatBubble("User", text, is_user=True)
         self._append_bubble(bubble, is_user=True)
         self._last_bubble = None  # 用户气泡不参与 update_last_bubble
 
     def append_agent_message(self, text: str,
                               model_name: Optional[str] = None) -> None:
+        # v6.0 5.1：多轮上下文——记 agent 回复进历史
+        self._conversation_history.append(("agent", text))
         bubble = ChatBubble("Agent", text, model_name=model_name, is_user=False)
         self._append_bubble(bubble, is_user=False)
         self._last_bubble = bubble
+
+    def get_conversation_history(self) -> list[tuple[str, str]]:
+        """v6.0 5.1：返回 session 内对话历史 [(role, text)]。
+
+        供 ChatWorker/orchestrator 构造多轮上下文（带历史发 LLM）。
+        内存上限 50 轮防爆，超出自动丢弃最旧。
+        """
+        if len(self._conversation_history) > 50:
+            self._conversation_history = self._conversation_history[-50:]
+        return list(self._conversation_history)
 
     def append_thinking(self, text: str) -> None:
         self.thinking_widget.set_text(text)
@@ -265,6 +311,8 @@ class AgentDialog(QWidget):
                 w.deleteLater()
         self._last_bubble = None
         self._thoughts_buf = ""
+        # v6.0 5.1：清空对话历史（新建会话）
+        self._conversation_history.clear()
         self.thinking_widget.set_text("")
         self._attachments.clear()
         self._clear_attach_area()

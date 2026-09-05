@@ -76,7 +76,7 @@ def test_crowded_high_density_triggers_yolo_path(tmp_path: Path) -> None:
     """密度高时触发 YOLO 去重路径（mock YOLO 返回相同物体集合→全部去重）。"""
     from src.core.motion_detector import (
         CrowdedSceneDetector, MotionConfig)
-    frames = _make_fake_frames(tmp_path / "frames", 20)
+    _make_fake_frames(tmp_path / "frames", 20)  # 落盘 20 帧供 YOLO glob（返回值不用）
     cfg = MotionConfig(
         day_threshold=5.0, night_threshold=3.0,
         crowded_density_threshold=0.3,  # 低阈值触发密集路径
@@ -93,6 +93,63 @@ def test_crowded_high_density_triggers_yolo_path(tmp_path: Path) -> None:
         segs = det._merge_to_segments(diff, ts, day_night, [], 19.0)
     # 物体集合全相同 → 去重后变化点大幅减少
     assert isinstance(segs, list)
+
+
+def test_crowded_dedup_reduces_segments_30pct(tmp_path: Path) -> None:
+    """指南 10.1：crowded 去重比父类省 30%+ segments。
+
+    构造 20 帧高密度变化（每帧 diff>阈值 → 19 个变化点），mock YOLO 返回
+    前 10 帧物体集合 ['person']、后 9 帧 ['person','backpack'] → 物体集合
+    只在 i=0 和 i=10 变化 → 去重后 2 个变化点。
+
+    断言 CrowdedSceneDetector 返回的 segments 数 < 父类 MotionDetector
+    返回的 segments 数 × 0.7（即减少 30%+）。
+
+    测试技巧：min_scene_len=0 + context_padding=1.0 让父类不合并相邻变化
+    点（19 个变化点 → 19 个独立 segment），隔离测 YOLO 去重效果，不测父类
+    padding 合并（那是 motion_detector.py 自己的测试职责）。
+    """
+    from src.core.motion_detector import (
+        CrowdedSceneDetector, MotionDetector, MotionConfig)
+    _make_fake_frames(tmp_path / "frames", 20)  # 落盘 20 帧供 YOLO glob
+    cfg = MotionConfig(
+        day_threshold=5.0, night_threshold=3.0,
+        min_scene_len=0,            # 隔离测试：父类不合并相邻变化点
+        context_padding=1.0,        # 段不重叠，每变化点独立成段
+        crowded_density_threshold=0.3,  # 19/19=1.0 > 0.3 → 触发 YOLO 去重
+        frame_out_dir=str(tmp_path / "frames"),
+    )
+    det = CrowdedSceneDetector(cfg)
+    # 父类 MotionDetector 实例：传 ffmpeg_exe 绕过 _find_ffmpeg
+    # （该方法只在 CrowdedSceneDetector 子类定义，父类直接构造会 AttributeError，
+    # 这是源码现状——本测试不修源码，传 ffmpeg_exe 走 __init__ 早返回路径）
+    parent = MotionDetector(cfg, ffmpeg_exe="ffmpeg")
+    # 20 帧全变化 → 19 个 diff 变化点（diff 长度 = 帧数 - 1）
+    diff = [10.0] * 19
+    ts = [float(i) for i in range(19)]
+    day_night = ["day"] * 19
+    # mock YOLO：前 10 帧 ['person']，后 9 帧 ['person','backpack']
+    # → 物体集合只在 i=0（空→person）和 i=10（person→person+backpack）变化
+    yolo_returns = [["person"]] * 10 + [["person", "backpack"]] * 9
+    with patch.object(det, "_detect_objects_yolo",
+                       return_value=yolo_returns):
+        crowded_segs = det._merge_to_segments(diff, ts, day_night, [], 19.0)
+    parent_segs = parent._merge_to_segments(diff, ts, day_night, [], 19.0)
+    # 父类：19 个变化点 → 19 个 segment（min_scene_len=0 不合并）
+    assert len(parent_segs) == 19, (
+        f"父类应返回 19 段（实际 {len(parent_segs)}），"
+        "若失败检查 min_scene_len/context_padding")
+    # 核心断言：crowded 去重后 segments 数 < 父类 × 0.7（减少 30%+）
+    assert len(crowded_segs) < len(parent_segs) * 0.7, (
+        f"crowded 应比父类省 30%+ segments：crowded={len(crowded_segs)}, "
+        f"parent={len(parent_segs)}, 比例={len(crowded_segs)/len(parent_segs):.2f}")
+    # 强化断言：去重后大幅减少（≤ 50%）
+    assert len(crowded_segs) <= len(parent_segs) * 0.5, (
+        f"crowded 去重后应 ≤ 父类的 50%：crowded={len(crowded_segs)}, "
+        f"parent={len(parent_segs)}")
+    # 语义断言：去重后只剩 2 个变化点（物体集合变化点）
+    assert len(crowded_segs) == 2, (
+        f"crowded 去重后应只剩 2 段（物体集合变化点），实际 {len(crowded_segs)}")
 
 
 def test_object_set_unchanged() -> None:

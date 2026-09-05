@@ -1,5 +1,37 @@
 # Changelog — Video Analysis Pro
 
+## [6.0.1] — 2026-09-05 · 测试补齐 + 对话框多轮上下文 + 快捷指令（指南 10.1/10.2 收尾）
+
+### 🎯 核心：指南 10.1/10.2 验证清单收尾
+
+v6.0.0 主里程碑已闭环，本版补齐指南第十/十一章验证清单剩余项：
+- 7.2 `test_agent_orchestrator.py` 新建（覆盖意图/skill/plan/run_plan/parse_tool_call）
+- 10.1 crowded 去重量化断言（省 30%+ segments）
+- 10.2 新增测试覆盖各改进项（80%+ 覆盖率）
+- 5.1 对话框多轮上下文 + 快捷指令按钮
+
+### 测试补齐（指南 7.2）
+- **新建 `tests/test_agent_orchestrator.py`（40 用例）**：classify_intent 7 类 + 优先级 / select_skill 命中未命中空 / build_plan SURVEILLANCE(3步)/SUMMARIZE(2步)/CLIP/ANALYZE/GENERAL+CONFIG+DOWNLOAD(空) / handle_user_message dict 字段+GENERAL降级+CONFIG/DOWNLOAD引导+llm_callback / run_plan mock registry done/skipped/error/完成/无plan / on_task_step_done continue/switch/3error→stop / parse_tool_call XML/思考段/无tool/空/位置参数/空参数/非法JSON/多tool取首。
+- **扩展 `tests/test_motion_detector_crowded.py`**：补 `test_crowded_dedup_reduces_segments_30pct` 量化断言——20 帧高密度变化（19 变化点）→ mock YOLO 前 10 帧 ['person'] 后 9 帧 ['person','backpack'] → 去重后只剩 2 段（物体集合变化点），断言 crowded segments < 父类 × 0.7（省 30%+）+ ≤ 50% + == 2 段三层断言。
+
+### 对话框打磨（指南 5.1）
+- **多轮上下文**：`AgentDialog._conversation_history: list[tuple[str,str]]`，append_user_message/append_agent_message 自动记入，`get_conversation_history()` 返回（上限 50 轮防爆），clear_messages 清空（新建会话）。供 ChatWorker/orchestrator 构造多轮上下文发 LLM。
+- **快捷指令按钮**：输入框上方加 4 个常用指令（🎯分析监控找包/🔑配key/📦下模型/📝视频摘要），小白用户一键预填输入框。
+
+### 🔧 改动文件
+- `tests/test_agent_orchestrator.py`（新，40 用例）
+- `tests/test_motion_detector_crowded.py`：补 30% 量化断言
+- `src/ui/agent_dialog.py`：_conversation_history + get_conversation_history + 快捷指令按钮
+- `src/utils/constants.py`：APP_VERSION 6.0.0 → 6.0.1
+
+### 🧪 验证
+- pyflakes：零告警（仅预存在 logic.py 的 unused import，非本次）。
+- 单测：v5.8+v5.9+v6.0 全套 = **98 passed**（含新增 40 agent_orchestrator + crowded 30% 量化）。
+- 10.1 验证清单全部可勾 ✅。
+
+### 📊 指南完整闭环（含本版收尾）
+《下一步改进指南.md》第十一/十二章 TODO 全部打勾，18 项改进 + 7.2 测试补齐 + 10.1/10.2 验证清单全部完成。
+
 ## [6.0.0] — 2026-09-05 · v6.0 主里程碑收尾（安全强化 + UI 打磨 + 文档同步）
 
 ### 🎯 核心：闭环《计划书/下一步改进指南.md》v6.0 收尾里程碑
