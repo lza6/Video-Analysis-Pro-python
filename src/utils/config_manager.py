@@ -39,6 +39,45 @@ def _secure_get(key: str, fallback: str = "") -> str:
     return fallback
 
 
+def is_keyring_available() -> bool:
+    """v6.0 6.1：检测密钥环是否可用（启动时状态栏红点警告用）。
+
+    返回 _KEYRING_AVAILABLE + 一次真实 get_password 探测（有些系统 import
+    成功但无后端服务，get_password 会抛）。探测用伪 key 不影响真实数据。
+    """
+    if not _KEYRING_AVAILABLE:
+        return False
+    try:
+        # 探测：get 一个不存在的 key，应返回 None 不抛
+        keyring.get_password(_KEYRING_SERVICE, "__keyring_probe__")
+        return True
+    except Exception:
+        return False
+
+
+def audit_ini_key_cleared(ini_path: str = None) -> bool:
+    """v6.0 6.1：启动时二次校验 app_config.ini 的 api_key 标记位已清空。
+
+    save_current_settings 成功入密钥环后清空 ini 的 api_key 字段，但历史
+    残留可能未清。本函数启动时检查 LastUsed.api_key 是否为空或"__keyring__"
+    标记位。返回 True 表示已清空（安全），False 表示有明文残留（不安全）。
+    """
+    from src.utils.constants import CONFIG_DIR, MAIN_CONFIG_FILENAME
+    p = ini_path or os.path.join(CONFIG_DIR, MAIN_CONFIG_FILENAME)
+    if not os.path.exists(p):
+        return True  # 无 ini 文件，无残留
+    try:
+        cp = configparser.ConfigParser()
+        cp.read(p, encoding="utf-8")
+        if "LastUsed" not in cp:
+            return True
+        api_key = cp.get("LastUsed", "api_key", fallback="")
+        # 空 / "__keyring__" 标记位 = 已清空；其他 = 明文残留
+        return api_key in ("", "__keyring__")
+    except Exception:
+        return True  # 读失败不阻断，保守返回 True
+
+
 class ConfigurationManager:
     def __init__(self):
         self.config_dir = CONFIG_DIR

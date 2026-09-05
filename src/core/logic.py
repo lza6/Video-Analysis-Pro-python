@@ -450,7 +450,11 @@ class ModelManager:
     }
 
     def verify_model_integrity(self, model_id: str) -> bool:
-        """下载后/启动时校验模型文件 SHA256，防篡改。"""
+        """下载后/启动时校验模型文件 SHA256，防篡改。
+
+        v6.0 6.3 强化：校验失败自动删除已下载文件（防使用被篡改模型）；
+        校验通过写 <path>.sha256 记录文件，启动时重校防磁盘篡改。
+        """
         expected = self.EXPECTED_SHA256.get(model_id)
         path = self.get_model_path(model_id)
         if not path or not path.exists():
@@ -466,8 +470,22 @@ class ModelManager:
         if not ok:
             logger.error(
                 f"模型 {model_id} 完整性校验失败！预期 {expected[:16]}… 实际 {actual[:16]}… "
-                f"文件可能被篡改/损坏，建议删除后重新下载。"
+                f"文件可能被篡改/损坏，已自动删除，请重新下载。"
             )
+            # v6.0 6.3 校验失败自动删除（防使用被篡改模型）
+            try:
+                path.unlink()
+                logger.warning(f"已删除被篡改的模型文件: {path}")
+            except Exception as e:
+                logger.error(f"删除被篡改模型失败 {path}: {e}")
+            return False
+        # v6.0 6.3 校验通过写 .sha256 记录文件，启动时重校
+        record_path = path.with_suffix(path.suffix + ".sha256")
+        try:
+            record_path.write_text(
+                f"{actual}  {path.name}\n", encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"写 sha256 记录失败 {record_path}: {e}")
         return ok
 
     def download_model(self, model_id: str, progress_callback=None):

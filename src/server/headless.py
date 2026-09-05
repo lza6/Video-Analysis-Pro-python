@@ -37,6 +37,32 @@ TMP_ROOT = Path(tempfile.gettempdir()) / "vap_headless"
 _ANALYZE_SEMAPHORE = threading.Semaphore(
     int(os.environ.get("VAP_ANALYZE_CONCURRENCY", "1")))
 
+# v6.0 6.2 IP 级限流：同 IP 10 req/min，防恶意刷 /analyze（已有信号量防 VRAM OOM，
+# 但单 IP 高频仍会占连接 + 日志洪水）。滑动窗口实现，进程内全局。
+_IP_RATE_LIMIT_PER_MIN = int(os.environ.get("VAP_IP_RATE_LIMIT_PER_MIN", "10"))
+_ip_request_times: dict[str, list[float]] = {}
+_ip_rate_lock = threading.Lock()
+
+
+def _ip_rate_limited(client_ip: str) -> bool:
+    """同 IP 滑动窗口限流。超过 _IP_RATE_LIMIT_PER_MIN 次/分钟返回 True。
+
+    线程安全：_ip_rate_lock 保护 _ip_request_times dict。
+    超限只记 warning + 返回 True（do_POST 返 429），不崩。
+    """
+    if _IP_RATE_LIMIT_PER_MIN <= 0:
+        return False  # 0 = 禁用限流
+    import time as _t
+    now = _t.time()
+    window = 60.0
+    with _ip_rate_lock:
+        times = _ip_request_times.setdefault(client_ip, [])
+        times[:] = [t for t in times if now - t < window]
+        if len(times) >= _IP_RATE_LIMIT_PER_MIN:
+            return True
+        times.append(now)
+        return False
+
 
 def _capability_matrix() -> dict:
     return {
@@ -221,6 +247,14 @@ class Handler(BaseHTTPRequestHandler):
         if not self._check_auth():
             return
 
+        # v6.0 6.2 IP 级限流：同 IP 10 req/min，防恶意刷 /analyze
+        client_ip = self.client_address[0] if self.client_address else "unknown"
+        if _ip_rate_limited(client_ip):
+            logger.warning(f"rate limited: {client_ip} 超过 "
+                           f"{_IP_RATE_LIMIT_PER_MIN} req/min")
+            self.close_connection = True
+            return self._json(429, {"error": "rate limit exceeded, retry later"})
+
         # T5 DoS 加固: 先校验 Content-Length 再读 body。
         # 历史风险: 恶意客户端声明 10GB 并读入内存 → OOM。
         max_mb = int(os.environ.get("VAP_MAX_UPLOAD_MB", "512"))
@@ -301,6 +335,17 @@ def main():
     _token = os.environ.get("VAP_HEADLESS_TOKEN", "")
     if _token:
         logger.info(f"headless auth: enabled (token length={len(_token)})")
+        # v6.0 6.2 弱 Token 警告：<16 字符弹警告（不阻断，只日志）
+        if len(_token) < 16:
+            logger.warning(
+                f"⚠️ VAP_HEADLESS_TOKEN 长度 {len(_token)} < 16，强度不足，"
+                f"建议用 >=32 字符的随机串（可用 python -c \"import secrets;"
+                f"print(secrets.token_urlsafe(32))\"）生成")
+    else:
+        logger.warning("headless auth: DISABLED (VAP_HEADLESS_TOKEN 未配置，"
+                       "/analyze 任何人可调，仅本地用安全)")
+    logger.info(f"IP 限流: {_IP_RATE_LIMIT_PER_MIN} req/min per IP "
+                f"(VAP_IP_RATE_LIMIT_PER_MIN)")
     server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     logger.info(f"Headless 服务已启动: http://0.0.0.0:{args.port}")
     try:

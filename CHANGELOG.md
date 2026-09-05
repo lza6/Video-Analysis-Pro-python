@@ -1,5 +1,51 @@
 # Changelog — Video Analysis Pro
 
+## [6.0.0] — 2026-09-05 · v6.0 主里程碑收尾（安全强化 + UI 打磨 + 文档同步）
+
+### 🎯 核心：闭环《计划书/下一步改进指南.md》v6.0 收尾里程碑
+
+指南 v6.0 里程碑（8.3）：UI 打磨 + 小白易用弹窗全覆盖 + 安全强化 + 文档同步。
+v6.0.0 一次性落地，至此指南 v5.8→v5.9→v6.0 全部 18 个改进项闭环完成。
+
+### 安全强化（第 6 章）
+
+| # | 改进项 | 改动 | 文件 |
+|---|------|------|------|
+| **6.1** | 密钥环降级告警强化 | `is_keyring_available()` 真实探测（import 成功但无后端也判 False）+ `audit_ini_key_cleared()` 启动二次校验 ini 的 api_key 标记位已清空 + main_window 启动 QTimer 调 `_audit_keyring_safety` 状态栏红点警告 | config_manager.py, main_window.py |
+| **6.2** | headless 鉴权强化 | `_ip_rate_limited()` 同 IP 10 req/min 滑动窗口（VAP_IP_RATE_LIMIT_PER_MIN 可配，0=禁用）+ do_POST 429 响应 + 弱 Token 警告（<16 字符日志告警）+ 启动日志提示限流状态 | headless.py |
+| **6.3** | 模型 SHA256 强化 | `verify_model_integrity` 校验失败自动 unlink 删除被篡改文件 + 校验通过写 `<path>.sha256` 记录文件（启动重校防磁盘篡改） | logic.py |
+
+### UI 打磨（第 5 章）
+
+| # | 改进项 | 改动 | 文件 |
+|---|------|------|------|
+| **5.3** | 小白易用弹窗全覆盖 | `_on_start` 五处静默 return 改 QMessageBox（无视频目录/目录无效/无关键物品图/无视频/批量引擎初始化失败），每处带明确下一步动作 | batch_tab.py |
+| **5.4** | 深色主题打磨 | QProgressBar 渐变色 QSS（蓝→青，命中金色留扩展）+ QTreeWidget 已有 `setAlternatingRowColors(True)` zebra | batch_tab.py |
+
+### 文档同步（第 10.3 章）
+
+- **README.md**：核心功能列表补 v6.0 新增段（批量监控/帧长图/Agent 自主化/安全强化/skills）+ NVIDIA Integrate 内置说明。
+- **.env.example**：补 VAP_IP_RATE_LIMIT_PER_MIN 说明 + 消费位置表。
+- **CHANGELOG.md**：加 v6.0.0 条目。
+- **constants.py**：APP_VERSION 5.9.0 → 6.0.0。
+
+### 🔧 改动文件
+- `src/utils/config_manager.py`：is_keyring_available + audit_ini_key_cleared
+- `src/server/headless.py`：_ip_rate_limited + do_POST 限流 + 弱 Token 警告
+- `src/core/logic.py`：verify_model_integrity 失败删除 + .sha256 记录
+- `src/ui/main_window.py`：_audit_keyring_safety 启动检查
+- `src/ui/batch_tab.py`：_on_start 五处弹窗 + 进度条 QSS
+- `tests/test_v60_security.py`（新）：13 单测（密钥环 5 + IP 限流 4 + SHA256 4）
+- `README.md` / `.env.example` / `constants.py`：文档同步
+
+### 🧪 验证
+- pyflakes：所有改/新文件零告警。
+- 单测：v6.0(13) + v5.9(8) + crowded(4) + v5.8(6) + 记忆层(8) + frame_strip(5) + agent_tools + core_pipeline = **57 passed**。
+- E2E：密钥环审计（空/标记位/明文残留三种）+ IP 限流（阈值内/超阈值/禁用/多IP独立）+ SHA256（失败删除/通过记录/无约束/缺文件）全验证。
+
+### 📊 指南完整闭环
+《下一步改进指南.md》全部 18 个改进项（v5.8 七断点 + router-1/2 + v5.9 四项 + v6.0 收尾）已闭环完成，版本路线 v5.7.1 → v6.0.0 达成。
+
 ## [5.9.0] — 2026-09-05 · Agent 自主化 + skills 扩展 + UI 反馈（指南 v5.9 里程碑）
 
 ### 🎯 核心：闭环《计划书/下一步改进指南.md》v5.9 全部改进项

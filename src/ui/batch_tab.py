@@ -234,6 +234,13 @@ class BatchTab(QWidget):
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
+        # v6.0 5.4 深色主题打磨：进度条渐变色 + 命中时金色高亮
+        self.progress_bar.setStyleSheet(
+            "QProgressBar { border: 1px solid #444; border-radius: 4px; "
+            "background: #1e1e1e; text-align: center; color: #ddd; }"
+            "QProgressBar::chunk { background: qlineargradient("
+            "x1:0, y1:0, x2:1, y2:0, stop:0 #2196F3, stop:1 #21cbcb); "
+            "border-radius: 3px; }")
         v.addWidget(self.progress_bar)
         # 预计完成时间（实时刷新：基于已跑片平均耗时 × 剩余片数 / 并发数）
         # 没有任何已完成片时显示"—"，有 1+ 片完成后才给出 ETA，避免误报。
@@ -415,31 +422,60 @@ class BatchTab(QWidget):
 
     def _on_start(self) -> None:
         if not _BATCH_RUNNER_AVAILABLE:
-            self._set_status("批量引擎未安装", error=True)
+            QMessageBox.warning(
+                self, "批量引擎未安装",
+                "src/core/batch_runner.py 缺失或 import 失败。\n"
+                "请检查依赖是否完整安装（pip install -r requirements.txt）。")
             return
+        # v6.0 5.3 小白易用弹窗：无前置条件时弹窗 + 明确下一步（不只状态栏文案）
         video_dir = self.txt_video_dir.text().strip()
-        if not video_dir or not Path(video_dir).is_dir():
-            self._set_status("错误：视频目录无效", error=True)
+        if not video_dir:
+            QMessageBox.information(
+                self, "请先填视频目录",
+                "请在「视频目录」栏填写监控视频所在路径（如 D:/监控/），\n"
+                "或点「浏览」选择目录。")
+            return
+        if not Path(video_dir).is_dir():
+            QMessageBox.warning(
+                self, "视频目录无效",
+                f"目录不存在或非目录：{video_dir}\n"
+                f"请检查路径拼写或点「浏览」重新选择。")
             return
         key_img = self.txt_key_image.text().strip()
-        if not key_img or not Path(key_img).exists():
-            self._set_status("错误：关键物品图不存在", error=True)
+        if not key_img:
+            QMessageBox.information(
+                self, "请先填关键物品图",
+                "请在「关键物品参考图」栏填写要查找的物品图片路径（如 D:/监控/关键物品.jpg），\n"
+                "或点「浏览」选择图片。")
+            return
+        if not Path(key_img).exists():
+            QMessageBox.warning(
+                self, "关键物品图不存在",
+                f"图片文件不存在：{key_img}\n请检查路径或重新选择。")
             return
         videos = self._scan_videos(video_dir)
         if not videos:
-            self._set_status("错误：目录下无视频文件", error=True)
+            QMessageBox.information(
+                self, "目录下无视频",
+                f"目录 {video_dir} 下无支持的视频文件（.mp4/.avi/.mov/.mkv）。\n"
+                f"请确认视频放在该目录或换一个目录。")
             return
         self.log_segments.clear()
         self.progress_bar.setValue(0)
         self._runner = self._build_runner()
         if self._runner is None:
-            self._set_status("错误：批量引擎初始化失败", error=True)
+            QMessageBox.critical(
+                self, "批量引擎初始化失败",
+                "BatchRunner 构造失败，可能是配置字段不匹配或 router 不可用。\n"
+                "请检查 .env 的 VAP_NV_API_KEYS 是否配置，或查看日志。")
             return
         try:
             self._runner.run_batch(videos)
         except Exception as e:
             logger.exception("[batch_tab] run_batch 异常")
-            self._set_status(f"错误：{e}", error=True)
+            QMessageBox.critical(
+                self, "批量启动失败",
+                f"启动批量分析时出错：{e}\n请查看日志排查。")
             return
         self.btn_start.setEnabled(False)
         self.btn_resume.setEnabled(False)

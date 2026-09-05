@@ -113,7 +113,16 @@
 *   **🔌 灵活的模型支持：**
     *   **本地部署：** 支持 Ollama (Llama3, Qwen2.5 等) 和 GGUF 模型文件。
     *   **云端调用：** 支持 OpenAI 格式 API (DeepSeek, GPT-4o, Claude 等)。
+    *   **NVIDIA Integrate 内置：** 11 key 轮换 + per-model 分片配置（Nemotron Omni 视频模型），客户端类型选「NVIDIA Integrate」即用。
 *   **🖥️ 现代化 GUI：** 基于 PyQt6 的深色主题界面，流畅丝滑，拒绝简陋。
+
+### v6.0 新增（监控批量分析 + 帧长图证据 + Agent 自主化）
+
+*   **🎞️ 批量监控分析：** 63 视频并发跑，motion_detector 1fps 抽帧 + scenedetect + 帧差分只送变化时段给 AI，**省 99% API 调用**；二次验证防误判；断点续跑。
+*   **🖼️ 帧长图证据：** 无变化视频也生成长图（20张/行横向铺满带 MM:SS 时间戳），可缩放 + 点击单帧 + 跳转播放器 + 问 AI，**解决伪证据盲区**。
+*   **🤖 Agent 自主化：** 对话驱动——用户提需求 → agent 自动选 skill（稀疏走廊/密集场景/夜间）→ 自动调 provider/key → per-model 切分片 → 每片跑完回调决策（继续/停/深挖）→ 跨会话记忆续跑。
+*   **🛡️ 安全强化：** 密钥环降级 UI 告警 + headless IP 限流（10 req/min）+ 弱 Token 警告 + 模型 SHA256 校验失败自动删除。
+*   **🎯 Skills 蒸馏：** 稀疏走廊 / 人多密集（YOLO 去重）/ 夜间自适应三场景 skill，agent 按场景自动匹配。
 
 ---
 

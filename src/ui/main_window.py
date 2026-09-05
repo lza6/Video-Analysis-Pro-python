@@ -569,6 +569,8 @@ class DesktopApp(QMainWindow):
         # v5.8 断点 B4：跨会话记忆层——启动后调 orchestrator.load_session_memory
         # 读 run_store 历史命中 + 未完成 run，注入 agent 对话作为系统消息。
         QTimer.singleShot(1500, self._load_agent_session_memory)
+        # v6.0 6.1：密钥环可用性 + ini 明文残留启动检查（状态栏红点警告）
+        QTimer.singleShot(2000, self._audit_keyring_safety)
         
         # Thread Pool for Image Loading
         self.image_pool = QThreadPool()
@@ -2323,6 +2325,32 @@ class DesktopApp(QMainWindow):
                 text)
         except Exception as e:
             logging.debug(f"[main_window] 投递批量进度到 agent 失败: {e}")
+
+    def _audit_keyring_safety(self) -> None:
+        """v6.0 6.1：启动时检查密钥环可用性 + ini 明文残留。
+
+        密钥环不可用 → 状态栏红点警告 + 日志告警；
+        ini 的 api_key 有明文残留 → 日志告警 + 状态栏提示清理。
+        """
+        try:
+            from src.utils.config_manager import is_keyring_available, audit_ini_key_cleared
+            kr_ok = is_keyring_available()
+            ini_ok = audit_ini_key_cleared()
+            if not kr_ok:
+                logging.warning(
+                    "⚠️ 密钥环不可用，API Key 将明文存 ini，建议修复密钥环服务")
+                if hasattr(self, 'status_bar') and self.status_bar:
+                    self.status_bar.showMessage(
+                        "🔴 密钥环不可用（Key 明文存 ini），见日志", 10000)
+            if not ini_ok:
+                logging.warning(
+                    "⚠️ app_config.ini 的 LastUsed.api_key 有明文残留，"
+                    "建议重新保存 API Key 入密钥环以清理")
+                if hasattr(self, 'status_bar') and self.status_bar:
+                    self.status_bar.showMessage(
+                        "🔴 ini 有 API Key 明文残留，建议重存入密钥环", 10000)
+        except Exception as e:
+            logging.debug(f"[main_window] 密钥环审计失败: {e}")
 
     def _load_agent_session_memory(self) -> None:
         """v5.8 断点 B4：启动后读 run_store 历史 → 注入 agent 对话。
