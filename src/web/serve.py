@@ -59,6 +59,58 @@ def _wait_and_open(host: str, port: int, timeout: float = 30.0) -> None:
         log.warning(f"自动打开浏览器失败({e}),请手动访问 {url}")
 
 
+def _try_build_frontend() -> None:
+    """首次启动自动构建前端(next build → out/)。
+
+    需 node/npm 在 PATH。失败只告警不阻断(API 仍可用,前端 404 可后续手动构建)。
+    """
+    import shutil
+    import subprocess
+
+    npm = shutil.which("npm")
+    if npm is None:
+        log.info("未找到 npm,跳过前端自动构建(需手动安装 Node.js 后 cd webapp && npm install && npm run build)")
+        return
+
+    from .app import FRONTEND_DIST
+    webapp_dir = FRONTEND_DIST.parent  # .../webapp
+    log.info(f"首次启动:自动构建前端到 {FRONTEND_DIST}(可能需 1-3 分钟)…")
+    # Windows 默认 GBK 编码会导致读 npm 输出 UnicodeDecodeError,统一用 utf-8
+    import subprocess as _sp
+    enc_env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    try:
+        # 1) 装依赖(若 node_modules 不存在)
+        if not (webapp_dir / "node_modules").is_dir():
+            log.info("安装前端依赖(npm install)…")
+            r = _sp.run(
+                [npm, "install"], cwd=str(webapp_dir),
+                capture_output=True, timeout=600, encoding="utf-8", errors="replace",
+                env=enc_env,
+            )
+            if r.returncode != 0:
+                log.warning(f"npm install 失败(exit={r.returncode}): {(r.stderr or '')[-300:]}")
+                return
+
+        # 2) 构建
+        log.info("构建前端(npm run build)…")
+        r = _sp.run(
+            [npm, "run", "build"], cwd=str(webapp_dir),
+            capture_output=True, timeout=600, encoding="utf-8", errors="replace",
+            env=enc_env,
+        )
+        if r.returncode != 0:
+            log.warning(f"npm run build 失败(exit={r.returncode}): {(r.stderr or '')[-300:]}")
+            return
+        if FRONTEND_DIST.is_dir():
+            log.info(f"前端构建完成: {FRONTEND_DIST}")
+        else:
+            log.warning(f"构建看似成功但 {FRONTEND_DIST} 仍不存在,检查 next.config output:export")
+    except _sp.TimeoutExpired:
+        log.warning("前端构建超时(>10min),跳过。请手动 cd webapp && npm run build")
+    except Exception as e:
+        log.warning(f"前端自动构建异常(不阻断 API): {e}")
+
+
 def run_server(host: str | None = None, port: int | None = None,
                open_browser: bool = True, reload: bool = False) -> int:
     """启动 Web 服务。返回进程退出码。"""
@@ -79,12 +131,14 @@ def run_server(host: str | None = None, port: int | None = None,
         )
         return 1
 
-    # 前端产物缺失时明确提示(开发态可忽略,走 next dev)
+    # 前端产物缺失时尝试自动构建(首次启动或产物被清时)
     from .app import FRONTEND_DIST
     if not FRONTEND_DIST.is_dir():
+        _try_build_frontend()
+    if not FRONTEND_DIST.is_dir():
         log.warning(
-            f"未找到前端构建产物 {FRONTEND_DIST},仅提供 API。"
-            f"请执行: cd webapp && npm install && npm run build"
+            f"未找到前端构建产物 {FRONTEND_DIST},仅提供 API(浏览器打开会 404)。"
+            f"请手动执行: cd webapp && npm install && npm run build"
         )
 
     if open_browser:

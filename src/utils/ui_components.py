@@ -135,13 +135,18 @@ class EnvironmentSetupWindow:
             self.run_command_realtime([python_exe, "-m", "pip", "install", "--upgrade", "pip"])
             
             req_file_path = "requirements.txt"
+            web_req_file_path = "requirements-web.txt"
             if os.path.exists(req_file_path):
-                self.log(f"从 {req_file_path} 安装依赖...")
+                self.log(f"从 {req_file_path} 安装核心依赖...")
                 self.run_command_realtime([pip_exe, "install", "-r", req_file_path])
             else:
                 self.log("requirements.txt 未找到，使用内置列表安装...")
                 self.run_command_realtime([pip_exe, "install", *REQUIRED_PACKAGES])
-            
+            # Web 后端依赖(Web UI 重构新增:fastapi/uvicorn/sse-starlette 等)
+            if os.path.exists(web_req_file_path):
+                self.log(f"从 {web_req_file_path} 安装 Web 依赖...")
+                self.run_command_realtime([pip_exe, "install", "-r", web_req_file_path])
+
             self.log("所有依赖安装完成。")
             
             # 3. Create Validation Marker
