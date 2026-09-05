@@ -1,5 +1,44 @@
 # Changelog — Video Analysis Pro
 
+## [6.1.0] — 2026-09-05 · v6.x/v7.0 展望落地（知识图谱 + 多agent协作 + 自检闭环 + Repository抽象）
+
+### 🎯 核心：指南第四章高级扩展方案落地
+
+指南 8.4 v6.x/v7.0 展望原"不承诺时间"，用户要求"完整落地闭环清楚所有"。
+v6.1.0 一次性落地 4 项高级扩展（知识图谱/多agent协作/自检闭环/Repository抽象），
+agent 从"单机单agent对话"升级到"跨视频时序推理 + 团队协作 + 自检闭环"。
+
+### 改进项闭环
+
+| # | 指南项 | 改动 | 文件 |
+|---|------|------|------|
+| **4.1** | 视频知识图谱（v6.1） | `VideoGraph` 纯 Python 时序图（无 networkx 依赖）：HitNode 节点 + 三种边（temporal<30min/spatial同摄像头/item共享关键词）+ `trace_item` BFS 追踪物品移动轨迹 + `build_from_run_store` 从 RunStore 扫命中建图 + `create_trace_item_tool` 注册到 ToolRegistry | video_graph.py, agent_tools.py, main_window.py |
+| **4.2** | 多 agent 协作（v7.0） | `MultiAgentOrchestrator`：Planner 拆任务 → Executor 执行 → Critic 审查 → Reporter 汇总，自研状态机驱动（不依赖 LangGraph 重依赖），`plan_complex_task` 规则拆解 + `run_next` 推进 + `critic_review` 规则/LLM 双模式 | agent_orchestrator.py |
+| **4.6** | 自检闭环（v7.0） | `self_check.py`：`find_gray_zones`（confidence 0.6-0.7 灰色地带）+ `find_unverified_hits`（未二次验证命中）+ `build_self_check_report` 人类可读报告 + `should_trigger_self_check`（≥3 error 或 ≥5 high risk 触发） | self_check.py |
+| **4.4** | Repository 抽象（v6.x 前置） | `RunStoreRepository` Protocol（duck typing）：RunStore 天然满足，为将来 PostgreSQL/远程实现替换留接口，`is_repository` 运行时校验 | run_store_repository.py |
+
+### 🔧 改动文件
+- `src/core/video_graph.py`（新，~280 行）：VideoGraph + HitNode + 三种边 + trace_item + build_from_run_store + to_dict/from_dict
+- `src/core/self_check.py`（新，~180 行）：gray_zones + unverified_hits + self_check_report + should_trigger
+- `src/core/run_store_repository.py`（新，~70 行）：Protocol + is_repository
+- `src/core/agent_orchestrator.py`：追加 AgentRole/AgentTask/MultiAgentOrchestrator（~120 行）
+- `src/core/agent_tools.py`：追加 create_trace_item_tool
+- `src/ui/main_window.py`：注册 trace_item 工具到 ToolRegistry
+- `tests/test_video_graph.py`（新，12 用例）
+- `tests/test_self_check.py`（新，8 用例）
+- `tests/test_run_store_repository.py`（新，4 用例）
+- `tests/test_multi_agent.py`（新，11 用例）
+- `src/utils/constants.py`：APP_VERSION 6.0.1 → 6.1.0
+
+### 🧪 验证
+- pyflakes：所有改/新文件零告警。
+- 单测：v5.8+v5.9+v6.0+v6.1 全套 = **147 passed**（含新增 35：multi_agent 11 + video_graph 12 + self_check 8 + repository 4）。
+- E2E 联动：多agent拆解复杂任务(5角色) + Critic审查 + 知识图谱轨迹追踪(2节点1链路) + 自检触发(3error) 全验证 ✅。
+- 降级铁律：VideoGraph 无 networkx（纯 dict）、MultiAgentOrchestrator 无 LangGraph（自研状态机）、self_check 无 LLM 真实调用（付费 API 红线）。
+
+### 📊 指南完整闭环（含本版）
+《下一步改进指南.md》第四章 6 项展望已落地 4 项（4.1/4.2/4.4/4.6），剩余 4.3 skill 自动生成 + 4.5 RTSP 实时流为 v7.0 后续。
+
 ## [6.0.1] — 2026-09-05 · 测试补齐 + 对话框多轮上下文 + 快捷指令（指南 10.1/10.2 收尾）
 
 ### 🎯 核心：指南 10.1/10.2 验证清单收尾

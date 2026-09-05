@@ -502,3 +502,52 @@ def create_summarize_hits_tool(app_context_getter):
         return f"共 {len(runs)} 个 run，{len(hits)} 个命中：\n" + "\n".join(hits)
     return summarize_hits
 
+
+# --- v6.1 视频知识图谱：跨视频时序推理工具（指南 4.1）---
+
+def create_trace_item_tool(app_context_getter):
+    """跨视频追踪物品轨迹（v6.1 视频知识图谱）。
+
+    从 RunStore 读取所有命中 segment，构建时序图（VideoGraph），按物品关键词
+    沿时序/空间/物品边遍历，返回按时间排序的轨迹链路。支持跨摄像头追踪同一
+    物品的移动轨迹。RunStore 不可用或无命中返回友好提示，不抛异常。
+    """
+    def trace_item(item_keyword: str = ""):
+        app = app_context_getter()
+        if not app:
+            return "App context missing."
+        if not item_keyword:
+            return "请提供 item_keyword 参数，如 '黑色旅行袋'。"
+        # 优先用 batch_tab 的 run_store（runs.db）
+        run_store = getattr(app, 'run_store_for_tools', None)
+        tab_batch = getattr(app, 'tab_batch', None)
+        if tab_batch is not None and hasattr(tab_batch, '_run_store'):
+            run_store = tab_batch._run_store
+        if run_store is None:
+            run_store = getattr(app, 'history_manager', None)
+        if run_store is None or not hasattr(run_store, 'list_runs'):
+            return "RunStore 未接入，无法追踪物品轨迹。"
+
+        try:
+            from src.core.video_graph import VideoGraph
+            graph = VideoGraph.build_from_run_store(run_store, limit=200)
+        except Exception as e:
+            return f"构建时序图失败：{e}"
+
+        chains = graph.trace_item(item_keyword)
+        if not chains:
+            return f"未在历史命中中找到包含「{item_keyword}」的轨迹。"
+
+        lines = [f"找到 {len(chains)} 条「{item_keyword}」轨迹："]
+        for i, chain in enumerate(chains, 1):
+            lines.append(f"\n--- 轨迹 {i}（{len(chain)} 个命中）---")
+            for n in chain:
+                ts_txt = n.abs_time.strftime("%Y-%m-%d %H:%M:%S") if n.abs_time \
+                    else f"+{n.timestamp_sec:.1f}s"
+                lines.append(
+                    f"[{ts_txt}] {n.video_name} @ {n.timestamp_sec:.1f}s "
+                    f"(置信度 {n.confidence:.2f}) {n.reason[:60]}"
+                )
+        return "\n".join(lines)
+    return trace_item
+

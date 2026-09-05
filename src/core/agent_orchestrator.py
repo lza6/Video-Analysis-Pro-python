@@ -583,3 +583,143 @@ def parse_tool_call(llm_output: str) -> Optional[tuple[str, dict]]:
     else:
         args = {}
     return tool_name, args
+
+
+# ======================================================================
+# v7.0 指南 4.2：多 agent 协作（Planner / Executor / Critic / Reporter）
+# ======================================================================
+
+class AgentRole(str, Enum):
+    """多 agent 角色分工（指南 4.2）。"""
+    PLANNER = "planner"
+    EXECUTOR = "executor"
+    CRITIC = "critic"
+    REPORTER = "reporter"
+
+
+@dataclass
+class AgentTask:
+    """多 agent 协作的单个任务（Planner 分派给 Executor/Critic/Reporter）。"""
+    task_id: str
+    role: AgentRole
+    description: str
+    tool_name: str
+    args: dict
+    status: str = "pending"
+    result: Optional[str] = None
+    assigned_to: Optional[str] = None
+
+
+class MultiAgentOrchestrator:
+    """多 agent 协作编排器（指南 4.2 v7.0）。
+
+    角色：Planner 拆任务 → Executor 执行 → Critic 审查 → Reporter 汇总。
+    状态机驱动（自研，不依赖 LangGraph 重依赖）。
+
+    复杂任务（"分析 63 视频找包 + 生成报告 + 剪辑集锦"）拆给多个角色，
+    避免 single agent 上下文爆炸。
+
+    不真实调付费 API（红线）：Executor 只触发工具（batch_analyze 预填配置
+    待用户确认，create_highlights 走已有逻辑）。
+    """
+
+    def __init__(self, tool_registry=None,
+                 llm_callback: Optional[Callable] = None):
+        self._registry = tool_registry
+        self._llm = llm_callback
+        self._tasks: list[AgentTask] = []
+        self._current = 0
+
+    def plan_complex_task(self, text: str) -> list[AgentTask]:
+        """Planner 角色：把复杂任务拆成多角色任务列表。
+
+        纯规则拆解（无 LLM 也能跑）：
+        - 含监控/找包 → Executor batch_analyze + Critic 审查 + Reporter 报告
+        - 含报告/汇总 → Reporter 生成
+        - 含剪辑/集锦 → Executor create_highlights
+        """
+        tasks: list[AgentTask] = []
+        lower = text.lower()
+        tid = 0
+        if any(k in lower for k in ("监控", "找包", "旅行袋", "surveillance")):
+            tid += 1
+            tasks.append(AgentTask(
+                task_id=f"t{tid}", role=AgentRole.EXECUTOR,
+                description="跑批量监控分析找包", tool_name="batch_analyze",
+                args={"video_dir": "D:/监控/", "item_description": text}))
+            tid += 1
+            tasks.append(AgentTask(
+                task_id=f"t{tid}", role=AgentRole.CRITIC,
+                description="审查批量结果找灰色地带误判",
+                tool_name="summarize_hits", args={}))
+            tid += 1
+            tasks.append(AgentTask(
+                task_id=f"t{tid}", role=AgentRole.REPORTER,
+                description="汇总命中生成报告", tool_name="summarize_hits",
+                args={}))
+        if any(k in lower for k in ("报告", "汇总", "总结")):
+            tid += 1
+            tasks.append(AgentTask(
+                task_id=f"t{tid}", role=AgentRole.REPORTER,
+                description="生成 MD 报告", tool_name="summarize_hits", args={}))
+        if any(k in lower for k in ("剪辑", "集锦", "剪出")):
+            tid += 1
+            tasks.append(AgentTask(
+                task_id=f"t{tid}", role=AgentRole.EXECUTOR,
+                description="剪辑集锦片段", tool_name="create_highlights",
+                args={"description": text}))
+        if not tasks:
+            tid += 1
+            tasks.append(AgentTask(
+                task_id=f"t{tid}", role=AgentRole.PLANNER,
+                description="单一任务直接执行", tool_name="", args={}))
+        self._tasks = tasks
+        self._current = 0
+        return tasks
+
+    def run_next(self) -> Optional[AgentTask]:
+        """执行下一个任务（状态机推进）。返回该步或 None（完成）。"""
+        if self._current >= len(self._tasks):
+            return None
+        task = self._tasks[self._current]
+        task.status = "running"
+        if self._registry is not None and task.tool_name:
+            try:
+                result = self._registry.execute_tool_call(
+                    task.tool_name, task.args)
+                task.result = str(result)
+                task.status = "done"
+            except Exception as e:
+                task.result = f"Error: {e}"
+                task.status = "error"
+        else:
+            task.result = "tool_registry 未接入，跳过真实执行"
+            task.status = "skipped"
+        self._current += 1
+        return task
+
+    def is_done(self) -> bool:
+        return self._current >= len(self._tasks)
+
+    def get_tasks(self) -> list[AgentTask]:
+        return list(self._tasks)
+
+    def critic_review(self, executor_result: str) -> str:
+        """Critic 角色：审查 Executor 结果。
+
+        纯规则（无 LLM）：检查结果含"命中"/"error"关键词返回审查意见。
+        有 LLM 时调 LLM 深度审查。
+        """
+        if self._llm is not None:
+            try:
+                return self._llm(
+                    f"审查执行结果，找 confidence 0.6-0.7 灰色地带误判：\n{executor_result}",
+                    [])
+            except Exception as e:
+                return f"（Critic LLM 审查失败）{e}"
+        if "命中" in executor_result:
+            return ("🔍 Critic 审查：发现命中，建议对 confidence 0.6-0.7 的"
+                    "灰色地带 deep_dive 二次验证，防误判。")
+        if "error" in executor_result.lower():
+            return "🔍 Critic 审查：执行有错误，建议重试或换策略。"
+        return "🔍 Critic 审查：结果无异常，可继续。"

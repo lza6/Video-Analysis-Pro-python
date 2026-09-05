@@ -2305,6 +2305,16 @@ class DesktopApp(QMainWindow):
             create_summarize_hits_tool(context_provider),
             {}
         )
+        # v6.1 指南 4.1：跨视频时序推理——知识图谱轨迹追踪工具
+        from src.core.agent_tools import create_trace_item_tool
+        self.tool_registry.register_tool(
+            "trace_item",
+            "Trace an item's movement trajectory across videos via the "
+            "temporal knowledge graph (cross-video temporal reasoning). "
+            "Args: {'item_keyword': '物品关键词如 黑色旅行袋'}",
+            create_trace_item_tool(context_provider),
+            {"item_keyword": "黑色旅行袋"}
+        )
 
     def _on_batch_progress_to_agent(self, video_name: str, seg_idx: int,
                                      hits: int, match: bool, conf: float) -> None:
