@@ -185,18 +185,34 @@ def delete_job(job_id: str) -> dict:
 
 @router.get("/jobs/{job_id}/stream", dependencies=[Depends(require_auth)])
 async def job_stream(job_id: str, request: Request):
-    """SSE 事件流。客户端断开时优雅退出。"""
+    """SSE 事件流。客户端断开时优雅退出。
+
+    v10.2.0:支持断线续连。客户端重连带 Last-Event-ID header,
+    服务端从 JobRecord.recent_events 重放 seq > last_event_id 的事件,
+    再继续 live 流。EventSource 原生不支持自定义 header,前端用
+    fetch + ReadableStream 实现 SSE 客户端(见 webapp/src/lib/sse.ts)。
+    """
     store = get_job_store()
     rec = store.get(job_id)
     if rec is None:
         raise HTTPException(status_code=404, detail={"error": "job not found"})
 
+    # Last-Event-ID header(HTTP 大小写不敏感,FastAPI headers case-insensitive)
+    last_event_id: int | None = None
+    raw = request.headers.get("last-event-id")
+    if raw:
+        try:
+            last_event_id = int(raw)
+        except ValueError:
+            log.warning(f"invalid Last-Event-ID header ignored: {raw!r}")
+            last_event_id = None
+
     from sse_starlette.sse import EventSourceResponse
-    return EventSourceResponse(_guard_stream(rec, request))
+    return EventSourceResponse(_guard_stream(rec, request, last_event_id))
 
 
-async def _guard_stream(rec: JobRecord, request: Request):
-    async for evt in stream_job_events(rec):
+async def _guard_stream(rec: JobRecord, request: Request, last_event_id: int | None = None):
+    async for evt in stream_job_events(rec, last_event_id=last_event_id):
         if await request.is_disconnected():
             log.debug(f"client disconnected from job {rec.job_id}")
             return

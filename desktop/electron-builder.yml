@@ -1,0 +1,47 @@
+appId: com.tingfeng.vap
+productName: TingFeng Hermes
+copyright: Copyright © Tingfeng (lza6)
+directories:
+  output: dist
+  build: .
+# 入口
+files:
+  - main.js
+  - preload.js
+  - runtime-controller.js
+  - package.json
+# 不打包开发依赖(避免把 electron-builder 自身塞进安装包)
+extraFiles:
+  - filter:
+      - "**/*"
+    from: ../webapp/out
+    to: resources/webapp/out
+# 把 venv 与 Python 源码打入安装包(开发期可选,发布期关键)
+extraResources:
+  - from: ../venv
+    to: venv
+    filter: ["**/*"]
+  - from: ../src
+    to: src
+    filter: ["**/*.py", "**/*.txt", "**/*.md"]
+  - from: ../config
+    to: config
+    filter: ["**/*.txt", "**/*.ini", "**/*.json"]
+  - from: ../requirements.txt
+    to: requirements.txt
+win:
+  target: nsis
+  icon: assets/icon.png
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: TingFeng Hermes
+mac:
+  target: dmg
+  icon: assets/icon.png
+linux:
+  target: AppImage
+  icon: assets/icon.png

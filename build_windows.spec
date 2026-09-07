@@ -42,8 +42,12 @@ hiddenimports += [
     "faster_whisper",
     "scenedetect",
     "moviepy",
-    "PyQt6.QtMultimedia", "PyQt6.QtMultimediaWidgets",
-    "matplotlib.backends.backend_qtagg",
+    # v9.0.0:matplotlib 用 Agg 后端(Web/Electron 不需要 Qt 后端)
+    "matplotlib.backends.backend_agg",
+    # v9.0.0:Web 后端 FastAPI/uvicorn
+    "fastapi", "uvicorn", "uvicorn.logging",
+    "sse_starlette", "multipart",
+    "pydantic", "pydantic_settings",
 ]
 
 a = Analysis(
@@ -63,8 +67,10 @@ a = Analysis(
         # 开发工具
         "pytest", "pyinstaller",
         # 多 Qt 绑定冲突: PyInstaller 不支持同时打包多个 Qt 绑定。
-        # 构建环境可能残留 PyQt5/PySide2，必须显式排除。
+        # v9.0.0 起桌面壳走 Electron,后端纯 FastAPI,所有 Qt 绑定一律排除。
         "PyQt5", "PyQt5.QtCore", "PyQt5.QtWidgets", "PyQt5.QtGui",
+        "PyQt6", "PyQt6.QtCore", "PyQt6.QtWidgets", "PyQt6.QtGui",
+        "PyQt6.QtMultimedia", "PyQt6.QtMultimediaWidgets",
         "PySide2", "PySide6",
         "IPython", "jedi", "parso",  # REPL 依赖，桌面应用不需要
     ],
@@ -87,7 +93,7 @@ exe = EXE(
     upx=False,
     console=False,          # GUI 应用不出黑窗口
     disable_windowed_traceback=False,
-    icon="resources/app_icon.ico",  # 听风公司 logo
+    icon="resources/app_icon.ico",  # 听风公司 logo(见 desktop/assets/icon.svg)
 )
 
 coll = COLLECT(

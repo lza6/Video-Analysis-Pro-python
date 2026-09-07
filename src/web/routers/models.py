@@ -114,8 +114,17 @@ async def download_stream(model_id: str, request):
     from sse_starlette.sse import EventSourceResponse
     from ..sse import stream_job_events
 
+    # v10.2.0:支持断线续连(读 Last-Event-ID)
+    last_event_id: int | None = None
+    raw = request.headers.get("last-event-id")
+    if raw:
+        try:
+            last_event_id = int(raw)
+        except ValueError:
+            last_event_id = None
+
     async def _gen():
-        async for evt in stream_job_events(rec):
+        async for evt in stream_job_events(rec, last_event_id=last_event_id):
             if await request.is_disconnected():
                 return
             yield evt
@@ -154,8 +163,9 @@ def _get_app_loop(request):
 def _launch_download(model_id: str, rec, loop: asyncio.AbstractEventLoop) -> None:
     """后台线程跑 download_model,进度推 SSE。"""
     def push(event_type: str, data: dict):
+        # v10.2.0:走 rec.put_event 统一分配 seq + 维护缓冲,支持断线续连
         try:
-            loop.call_soon_threadsafe(rec.queue.put_nowait, {"type": event_type, "data": data})
+            loop.call_soon_threadsafe(rec.put_event, event_type, data)
         except Exception as e:
             log.debug(f"push failed: {e}")
 

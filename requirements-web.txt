@@ -1,6 +1,5 @@
 # Web API 依赖(Web UI 重构)
 # 与 requirements.txt 合并使用: pip install -r requirements.txt -r requirements-web.txt
-# 注: requirements.txt 中的 PyQt6/pyqtdarktheme 将在阶段 4 收尾时移除
 
 # --- Web 后端 ---
 fastapi>=0.115.0

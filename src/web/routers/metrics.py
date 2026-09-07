@@ -120,3 +120,24 @@ def metrics_chart(job_id: str):
     if not full.is_file():
         raise HTTPException(status_code=404, detail={"error": "chart file not found"})
     return FileResponse(full, media_type="image/png")
+
+
+@router.get("/runtime/gc", dependencies=[Depends(require_auth)])
+def gc_status(request: Request) -> dict:
+    """GCGuard 运行态:基线 / 采样窗口 / 内存趋势 + 触发计数。
+
+    v10.0.0 F4:7×24 监控防 OOM。前端 metrics 页可拉此接口画 RSS 趋势。
+    未装配 GCGuard(如开发态)返回 disabled。
+    """
+    guard = getattr(request.app.state, "gc_guard", None)
+    if guard is None:
+        return {"enabled": False}
+    baseline = guard.baseline.snapshot()
+    return {
+        "enabled": True,
+        "running": guard.is_running(),
+        "threshold_mb": guard.threshold_mb,
+        "interval_sec": guard.interval_sec,
+        "baseline": baseline,
+        "current_mb": guard.get_memory_mb(),
+    }

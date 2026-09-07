@@ -18,6 +18,9 @@ interface NavItem {
 
 /* 内联 SVG 图标(单一 stroke 风格,16px 网格)—— 取代 emoji,跨平台一致 */
 const I = {
+  dashboard: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4.5 h-4.5"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+  ),
   analyze: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4.5 h-4.5"><path d="M15 10l5-3v10l-5-3M3 6h12v12H3z" strokeLinecap="round" strokeLinejoin="round"/></svg>
   ),
@@ -51,12 +54,19 @@ const I = {
   decisions: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4.5 h-4.5"><path d="M9 6h11M9 12h11M9 18h11M4 6h1v4m-1 8h2l2 2" strokeLinecap="round"/></svg>
   ),
+  requests: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4.5 h-4.5"><path d="M4 6h16M4 12h16M4 18h10" strokeLinecap="round"/><circle cx="20" cy="18" r="2"/><path d="M20 18v-3" strokeLinecap="round"/></svg>
+  ),
+  providers: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4.5 h-4.5"><path d="M8 3l-4 4 4 4M16 3l4 4-4 4M3 11v3a3 3 0 0 0 3 3h12a3 3 0 0 0 3-3v-3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+  ),
   settings: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4.5 h-4.5"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M4.9 4.9l2.1 2.1m10 10l2.1 2.1m0-14.2l-2.1 2.1m-10 10l-2.1 2.1" strokeLinecap="round"/></svg>
   ),
 };
 
 const NAV: NavItem[] = [
+  { href: "/dashboard/", label: "总览", icon: I.dashboard },
   { href: "/", label: "AI 分析", icon: I.analyze },
   { href: "/gallery/", label: "关键帧画廊", icon: I.gallery },
   { href: "/media/", label: "摘要媒体", icon: I.media },
@@ -68,6 +78,8 @@ const NAV: NavItem[] = [
   { href: "/surveillance/", label: "监控分析", icon: I.surveillance },
   { href: "/skills/", label: "Skills", icon: I.skills },
   { href: "/decisions/", label: "决策日志", icon: I.decisions },
+  { href: "/requests/", label: "请求日志", icon: I.requests },
+  { href: "/providers/", label: "提供商", icon: I.providers },
   { href: "/settings/", label: "设置", icon: I.settings },
 ];
 
@@ -109,9 +121,9 @@ export function AppShell({
       >
         <div className="flex items-center gap-2.5 px-2 lg:px-3 pb-4">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.svg" alt="" className="w-7 h-7 shrink-0" />
+          <img src="/logo.png" alt="TingFeng Hermes" className="w-7 h-7 shrink-0" />
           <span className="hidden lg:block text-sm font-bold text-white tracking-tight">
-            Video Analysis Pro
+            TingFeng Hermes
           </span>
         </div>
 

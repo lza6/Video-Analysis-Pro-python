@@ -15,7 +15,7 @@ interface VideoPickerProps {
 
 /**
  * 视频来源选择:拖拽/点击上传,或填本机路径(本地模式,隐私不出本机)。
- * 取代 PyQt6 的拖拽 drop frame。
+ * 桌面版拖拽 drop frame 的 Web 等价物。
  */
 export function VideoPicker({
   file,

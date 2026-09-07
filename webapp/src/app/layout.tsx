@@ -2,11 +2,11 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Video Analysis Pro — 控制台",
-  description: "本地 AI 视频分析工作台:三阶段流水线 + Agent 对话式操控。",
+  title: "TingFeng Hermes — 控制台",
+  description: "通用全能 AI Agent 桌面平台:视频分析 + Agent 对话 + IM 网关 + 远程访问。",
   // 内部工具,不被搜索引擎索引
   robots: { index: false, follow: false },
-  icons: { icon: "/logo.svg" },
+  icons: { icon: "/logo.png" },
 };
 
 export const viewport: Viewport = {

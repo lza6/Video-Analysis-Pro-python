@@ -1,0 +1,19 @@
+{
+  "name": "tingfeng-hermes-desktop",
+  "version": "10.1.0",
+  "description": "TingFeng Hermes — Electron 桌面壳(复用 webapp/FastAPI)",
+  "main": "main.js",
+  "author": "Tingfeng (lza6)",
+  "license": "GPL-3.0",
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check main.js && node --check preload.js && node --check runtime-controller.js",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "private": true
+}

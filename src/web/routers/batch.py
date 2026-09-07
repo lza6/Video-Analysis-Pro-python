@@ -11,9 +11,9 @@
   GET    /api/batch/stream   → SSE 进度(run_started/video_started/segment_done/...)
 
 复用 src/core/batch_runner.BatchRunner + src/core/run_store.RunStore。
-BatchRunner 是 QObject + pyqtSignal:Web 无 Qt 事件循环,需 video_concurrency=1
-(DirectConnection 即时投递)或外层 worker 线程轮询。本路由用 worker 线程 +
-pyqtSignal.connect 回调 → asyncio.Queue → SSE 的桥接。
+BatchRunner 用纯 Python _Signal(无 Qt 依赖):回调同步投递,本路由把回调桥到
+asyncio.Queue → SSE。video_concurrency 走 BatchConfig 默认值(多视频并发),
+分片判断的 AI 调用由 ProviderRouter 多 key 限速兜底。
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ log = logging.getLogger("web.batch")
 
 router = APIRouter(prefix="/api", tags=["batch"])
 
-# 进程级单例(类型用字符串前缀避免 import PyQt6 在模块加载期失败)
+# 进程级单例
 _runner = None
 _run_store = None
 _lock = threading.Lock()
@@ -252,8 +252,8 @@ def _build_runner(req: BatchRunReq, store):
             temperature=req.temperature,
             confidence_threshold=req.confidence_threshold,
             frame_change_pct=req.frame_change_pct,
-            # 单视频串行:Web 无 Qt 事件循环,避免信号跨线程问题
-            video_concurrency=1,
+            # 多视频并发:纯 Python _Signal 不依赖 Qt 事件循环,ThreadPoolExecutor 正常跑;
+            # AI 调用由 ProviderRouter 多 key 限速兜底。concurrency_per_key=2 提速。
             concurrency_per_key=2,
         )
         return BatchRunner(cfg, store, pr)
@@ -263,11 +263,12 @@ def _build_runner(req: BatchRunReq, store):
 
 
 def _wire_signals(runner, loop: asyncio.AbstractEventLoop) -> None:
-    """把 BatchRunner 的 pyqtSignal 连到 SSE 广播。
+    """把 BatchRunner 的纯 Python _Signal 连到 SSE 广播。
 
-    pyqtSignal.connect 在无 QCoreApplication 时也能工作(DirectConnection
-    即时投递,不依赖 Qt 事件循环),因为 worker 线程里直接 emit 会同步调
-    connected 的 Python 可调用对象。
+    _Signal.connect 注册普通 Python 回调,emit 时同步调回调;回调里用
+    loop.call_soon_threadsafe(queue.put_nowait, ev) 把事件投递回 asyncio
+    事件循环(线程安全),由 SSE stream 消费。worker 线程 emit 触发回调,
+    回调跨线程进入事件循环,无需 Qt 事件循环。
     """
     try:
         runner.run_started.connect(
@@ -300,7 +301,7 @@ def _wire_signals(runner, loop: asyncio.AbstractEventLoop) -> None:
             lambda msg: _broadcast(loop, {"type": "error", "data": {"message": msg}})
         )
     except Exception as e:
-        log.warning(f"wire signals failed (非 Qt 环境?): {e}")
+        log.warning(f"wire signals failed: {e}")
 
 
 def _broadcast(loop: asyncio.AbstractEventLoop, event: dict) -> None:

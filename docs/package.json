@@ -1,0 +1,14 @@
+{
+  "name": "tingfeng-hermes-docs",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TingFeng Hermes 文档站（VitePress）",
+  "scripts": {
+    "docs:dev": "vitepress dev",
+    "docs:build": "vitepress build",
+    "docs:preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "vitepress": "^1.5.0"
+  }
+}

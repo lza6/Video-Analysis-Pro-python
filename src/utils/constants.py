@@ -2,8 +2,8 @@
 import sys
 
 # Application Info
-APP_NAME = "Video Analysis Pro"
-APP_VERSION = "8.0.0"
+APP_NAME = "TingFeng Hermes"
+APP_VERSION = "10.1.0"
 
 # Environment
 VENV_SUBDIR_NAME = "venv"
@@ -39,23 +39,29 @@ THEMES = {
 }
 
 # Dependencies checked by the launcher import-verification script.
-# Mirrors requirements.txt (keep in sync).
+# Mirrors requirements.txt + requirements-web.txt (keep in sync).
+# v9.0.0: PyQt6/pyqtdarktheme 全清(桌面壳走 Electron,后端纯 FastAPI,无 Qt 依赖)。
 REQUIRED_PACKAGES = [
-    "PyQt6>=6.6.0",
-    "pyqtdarktheme>=2.1.0",
     "opencv-python-headless>=4.8.0",
     "numpy",
     "scenedetect>=0.6.2",
-    "ultralytics>=8.0.0",
+    "ultralytics>=8.3.0",
     "torch",
     "faster-whisper>=1.0.0",
     "sentence-transformers>=2.3.0",
-    "chromadb",
+    "chromadb>=1.5.9",
     "markdown2",
     "requests",
     "psutil",
-    "moviepy",
+    "moviepy>=2.0",
     "imageio-ffmpeg",
+    # Web 后端(v8 Web UI 重构新增,launcher 需验证)
+    "fastapi>=0.115.0",
+    "uvicorn>=0.32.0",
+    "python-multipart>=0.0.12",
+    "sse-starlette>=2.1.3",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
 ]
 
 # Paths

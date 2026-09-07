@@ -11,7 +11,7 @@
     分片临时目录（clean_segments=True 时），命中 clip 单独保留。
   - 断点续跑：run_store 里 status=started/running 的 run，查 segments 已完成的
     seg_idx 跳过，未完成的继续。
-  - UI 能查实时进度：QObject 发信号 run_started/video_started/segment_done/
+  - UI 能查实时进度：纯 Python _Signal 发回调 run_started/video_started/segment_done/
     video_done/batch_progress/batch_finished/error；UI 直接读 run_store.get_progress。
 
 接缝说明（与 surveillance_agent 的关系）
@@ -43,13 +43,33 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import QObject, pyqtSignal
-
 # 不在模块顶层 import torch / cv2：headless/无 GPU 环境也要能 import 本模块
 # （与 surveillance_agent.py 顶部 import torch 不同——batch_runner 只在切分片
 # 时按需 import cv2 读元数据，不强制全局 torch）。
 from src.core.motion_detector import MotionConfig, MotionDetector
 from src.core.frame_strip import FrameStripBuilder
+
+
+class _Signal:
+    """纯 Python 信号(替代 pyqtSignal,无 Qt 事件循环依赖)。
+
+    connect(cb) 注册回调;emit(*args) 同步调所有回调(异常隔离,不阻断后续)。
+    Web 后端场景下回调多为 `loop.call_soon_threadsafe(queue.put_nowait, ev)`
+    的薄包装,emit 同步投递即可跨线程进入 asyncio 事件循环。
+    """
+
+    def __init__(self) -> None:
+        self._callbacks: list = []
+
+    def connect(self, cb) -> None:
+        self._callbacks.append(cb)
+
+    def emit(self, *args) -> None:
+        for cb in list(self._callbacks):
+            try:
+                cb(*args)
+            except Exception as e:
+                logger.warning(f"[batch] signal callback 异常(忽略): {e}")
 
 logger = logging.getLogger("VideoAnalyzerCore")
 
@@ -148,14 +168,13 @@ def frame_change_pct_to_thresholds(pct: int) -> Tuple[float, float]:
 # ----------------------------------------------------------------------
 # 批量引擎
 # ----------------------------------------------------------------------
-class BatchRunner(QObject):
+class BatchRunner:
     """批量视频分析引擎。
 
     线程模型：
-      - run_batch 在 QThread.run() 里调用（由调用方包 QThread，或直接在 worker
-        线程调用）。本类本身不继承 QThread，避免多重继承陷阱；调用方自行
-        `QThread(runner)` 或 `runner.moveToThread(thread)`。
-      - 信号通过 pyqtSignal 跨线程回主线程（Qt 自动 QueuedConnection）。
+      - run_batch 可在任意 worker 线程调用（Web 场景由路由层起 threading.Thread）。
+        本类本身无 Qt 依赖，不继承 QObject；信号经纯 Python _Signal 同步投递，
+        回调由调用方注册（Web 路由桥接到 asyncio.Queue + SSE，或测试直接断言）。
       - cancel() 设标志位，当前视频跑完即停（优雅停止，不强杀正在飞的 HTTP）。
 
     并发模型：
@@ -165,31 +184,29 @@ class BatchRunner(QObject):
         调 router.post_nvidia，router 内部多 key 轮换 + 40/min 限速。
     """
 
-    # ---- 信号 ----
-    run_started = pyqtSignal(str, str)  # run_id, video_name
-    video_started = pyqtSignal(str, str)  # run_id, video_name
-    segment_done = pyqtSignal(str, int, bool, float)  # run_id, seg_idx, match, conf
-    video_done = pyqtSignal(str, str, int)  # run_id, video_name, hits
-    batch_progress = pyqtSignal(int, int)  # done, total
-    batch_finished = pyqtSignal(int, int)  # total_runs, total_hits
-    error = pyqtSignal(str)
+    # ---- 信号（纯 Python _Signal，无 Qt 依赖） ----
+    run_started = _Signal()        # (run_id, video_name)
+    video_started = _Signal()      # (run_id, video_name)
+    segment_done = _Signal()       # (run_id, seg_idx, match, conf)
+    video_done = _Signal()         # (run_id, video_name, hits)
+    batch_progress = _Signal()     # (done, total)
+    batch_finished = _Signal()     # (total_runs, total_hits)
+    error = _Signal()              # (msg,)
 
     def __init__(self, config: BatchConfig, run_store: Any,
-                 router: Any, parent: Optional[QObject] = None,
+                 router: Any,
                  on_segment_judged: Optional[Any] = None):
         """
         Args:
             config: BatchConfig
             run_store: RunStore 实例（写 runs/segments/clips）
             router: ProviderRouter 实例（多 key 轮换 + 限速 + 无限重试）
-            parent: QObject 父（可选）
             on_segment_judged: v5.8 断点 B2 每轮介入回调。每个分片判断完调它，
                 传入 {run_id, seg_idx, match, confidence, reason, video_name,
                 hits_so_far}，返回 "continue"/"stop"/"deep_dive"。
                 stop → 设 _cancel_flag（只停当前视频）；deep_dive → 对该 seg
                 再送一次 _verify_segment。None 时不介入（保持旧行为）。
         """
-        super().__init__(parent)
         self.config = config
         self.run_store = run_store
         self.router = router
@@ -261,9 +278,8 @@ class BatchRunner(QObject):
         self._cancel_flag = False
         vc = max(1, self.config.video_concurrency)
         logger.info(f"[batch] 开始批量分析：{total} 个视频，视频并发 {vc}")
-        # video_concurrency=1 时在当前线程串行跑（信号 DirectConnection 即时投递，
-        # 无需事件循环，测试友好）；>1 时用线程池并发（信号 QueuedConnection，
-        # 需调用方跑 Qt 事件循环）
+        # video_concurrency=1 时在当前线程串行跑（回调同步投递，测试友好）；
+        # >1 时用线程池并发（回调经闭包桥接到 SSE，线程安全由调用方保证）
         if vc == 1:
             for i, video in enumerate(videos):
                 if self._cancel_flag:
@@ -832,6 +848,7 @@ class BatchRunner(QObject):
             "clip_path": str(clip_path) if clip_path.exists() else "",
         })
 
+    @staticmethod
     def _fmt_timecode(sec: float) -> str:
         """秒 → HH:MM:SS（24h，监控时间码）。"""
         s = max(0.0, float(sec))

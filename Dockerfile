@@ -19,10 +19,11 @@ WORKDIR /app
 
 COPY requirements.txt requirements-ocr.txt ./
 # 纯 headless 不装 GUI/OCR 重依赖；chromadb/weasyprint 等保留
-RUN pip install --no-cache-dir $(grep -vE "^(PyQt6|pyqtdarktheme|#)" requirements.txt | tr '\n' ' ') \
+# v9.0.0: requirements.txt 已去 PyQt6/pyqtdarktheme,直接装即可。
+RUN pip install --no-cache-dir -r requirements.txt \
     || pip install --no-cache-dir -r requirements.txt --dry-run >/dev/null 2>&1 || true
-# 上面 grep 注入法对复杂行脆弱，fallback 到精简显式安装:
-# 显式列表必须与 requirements.txt 同步：v5.1 修过 seaborn 缺失致 Phase3 全禁用，
+# 上行若失败(部分 wheel 在 slim 镜像缺编译链),fallback 到精简显式安装:
+# 显式列表必须与 requirements.txt 同步：v5.1 修过 seaborn 缺失致 Phase3 全禁用,
 # 但此 fallback 漏装 seaborn/pandas/matplotlib → Docker 形态天然复活该 P0（audit-blinds P2-12）。
 RUN pip install --no-cache-dir \
         numpy opencv-python-headless scenedetect ultralytics \

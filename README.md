@@ -1,366 +1,253 @@
-<p align="center"><img src="resources/logo_256.png" alt="听风公司" width="160"/></p>
+<p align="center"><img src="resources/logo_256.png" alt="TingFeng Hermes" width="160"/></p>
 
-# 🎬 Video Analysis Pro (Python Edition)
-## 您的私人 AI 视频深度分析专家 | Your Personal AI Video Analyst
+# TingFeng Hermes（听风·赫尔墨斯）
+## 通用全能 AI Agent 桌面平台 | Your Universal AI Agent Desktop Platform
 ### 由 听风公司 (Tingfeng) 出品
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-yellow.svg)](https://www.python.org/)
-[![PyQt6](https://img.shields.io/badge/GUI-PyQt6-green.svg)](https://riverbankcomputing.com/software/pyqt/)
-[![Ollama](https://img.shields.io/badge/AI-Ollama%20%7C%20OpenAI-orange.svg)](https://ollama.com/)
+[![Web](https://img.shields.io/badge/Web-Electron-black.svg)](https://www.electronjs.org/)
+[![AI](https://img.shields.io/badge/AI-Agent%20Framework-orange.svg)](./src/core/agent)
 
-> **"在这个信息过载的时代，我们不缺视频，缺的是快速洞察视频核心内容的能力。Video Analysis Pro，让 AI 替你'看'完世界。"** 🌍✨
+> **"跑在你设备里的全能 AI Agent。通过 IM 渠道连接万物，内置视频分析能力——不只是工具，是一个会思考、会协作、会进化的数字伙伴。"**
 
----
-
-## 🖼️ 软件界面预览 (UI Preview)
-
-### 桌面端 · 主界面概览
-
-<p align="center">
-  <img src="docs/screenshots/desktop/desktop-overview.png" alt="Video Analysis Pro 桌面端主界面" width="860"/>
-</p>
-
-> 基于 PyQt6 的深色主题 GUI——左侧数据提取区、中央多 Tab 工作区、右侧 Agent 智能助手面板，三栏布局逻辑清晰。
-
-### 桌面端 · 各功能 Tab 详图
-
-<table>
-<tr>
-<td align="center"><b>📝 AI 摘要报告</b></td>
-<td align="center"><b>🖼️ 关键帧画廊</b></td>
-</tr>
-<tr>
-<td><img src="docs/screenshots/desktop/desktop-tab-report.png" alt="AI 摘要报告 Tab"/></td>
-<td><img src="docs/screenshots/desktop/desktop-tab-gallery.png" alt="关键帧画廊 Tab"/></td>
-</tr>
-<tr>
-<td align="center"><b>🎬 摘要媒体 (GIF/Clips)</b></td>
-<td align="center"><b>📊 元数据与画质</b></td>
-</tr>
-<tr>
-<td><img src="docs/screenshots/desktop/desktop-tab-media.png" alt="摘要媒体 Tab"/></td>
-<td><img src="docs/screenshots/desktop/desktop-tab-metrics.png" alt="元数据与画质 Tab"/></td>
-</tr>
-<tr>
-<td align="center"><b>📜 系统日志</b></td>
-<td align="center"><b>📦 模型管理</b></td>
-</tr>
-<tr>
-<td><img src="docs/screenshots/desktop/desktop-tab-logs.png" alt="系统日志 Tab"/></td>
-<td><img src="docs/screenshots/desktop/desktop-tab-models.png" alt="模型管理 Tab"/></td>
-</tr>
-</table>
-
-### 官网落地页（玻璃拟态 2.0 · Next.js + Motion + R3F）
-
-<p align="center">
-  <img src="docs/screenshots/opt/section-hero.png" alt="官网 Hero 首屏" width="860"/>
-</p>
-
-> 官网采用玻璃拟态 2.0 风格，Hero 区内置 3D 透射晶体 + 粒子场 + 指针视差，动效全程支持 `prefers-reduced-motion` 降级。完整 UI 展示见 [UI-展示.md](./UI-展示.md)。
-
-<p align="center">
-  <img src="docs/screenshots/opt/section-features.png" alt="官网功能区" width="860"/>
-</p>
+> **截图待补**：v10.0.0 完成自进化+可观测+真实化迭代后，webapp UI（Next.js 16 + React 19 + Tailwind v4 玻璃拟态）截图即将更新。
 
 ---
 
-## 📖 目录 (Table of Contents)
+## 目录
 
-1. [项目简介与哲学](#-项目简介与哲学-philosophy)
-2. [核心功能](#-核心功能-features)
-3. [小白懒人安装教程](#-小白懒人安装教程-quick-start)
-4. [使用指南](#-使用指南-user-guide)
-5. [技术原理大揭秘](#-技术原理大揭秘-technical-deep-dive)
-6. [项目文件结构](#-项目文件结构-file-structure)
-7. [优缺点与适用场景](#-优缺点与适用场景-pros--cons)
-8. [开发者蓝图与扩展](#-开发者蓝图与扩展-developer-blueprint)
-9. [未来展望与待办](#-未来展望与待办-roadmap)
-10. [开源协议](#-开源协议-license)
+1. [项目简介](#项目简介)
+2. [核心功能](#核心功能)
+3. [快速开始](#快速开始)
+4. [架构总览](#架构总览)
+5. [安装与开发](#安装与开发)
+6. [打包发布](#打包发布)
+7. [开源协议](#开源协议)
 
 ---
 
-## 🖼️ 软件界面预览 (UI Preview)
+## 项目简介
+
+**TingFeng Hermes** 是听风公司出品的通用全能 AI Agent 桌面平台。它从 v8.0.0 的 Web UI 视频分析工具升级而来，v9.0.0 完成"通用全能 Agent 桌面平台"转型，v10.0.0 迭代到"自进化 + 可观测 + 真实化"：
+
+- **跑在你设备里**：Electron 桌面壳 + 本地 Python FastAPI 后端，数据不出设备
+- **通过 IM 渠道连接万物**：内置 IM 网关（微信 / Telegram / Discord），把 Agent 能力投递到聊天渠道
+- **内置视频分析能力**：三阶段流水线（抽帧/转录/检测 → LLM 推理 → 媒体生成）作为 Agent 工具集之一
+- **DSH 式 Agent 框架**：ReactLoopAgent + SessionEvent append-only log + 工具四 waterfall + subagent director + 插件框架
+- **远程访问**：Tailscale Serve / Direct / Cloudflare Access tunnel，从任意设备访问你的 Agent
+
+### v10.0.0 新增能力
+
+- **自进化**：Session 持久化记忆（崩溃可恢复）+ 工具异常分级自动重试/降级 + Agent 经验沉淀进 skill
+- **可观测**：结构化 JSON 日志 + trace_id 贯穿 + GC 长跑守护 + dashboard 总览页
+- **真实化**：提示注入守卫（零宽字符 + system: 伪冒检测）+ 凭据审计与轮换 + VLM 视觉理解接入
+- **质量门禁**：CI 覆盖率门禁 + 前端 Playwright E2E + 旧产物清理
+
+### 核心价值观
+
+- **隐私至上**：本地运行，数据不出设备；IM 网关只投递摘要，不投递原始视频
+- **Agent 形态**：对话驱动 + 自动 plan + 工具自动调用 + 长程任务追踪 + 每步可追溯
+- **可扩展**：插件框架（声明式 YAML patch）+ subagent 角色 + skill 库，社区可贡献能力
+- **开源精神**：GPL-3.0，修改必开源
 
 ---
 
-## 🧘 项目简介与哲学 (Philosophy)
+## 核心功能
 
-**Video Analysis Pro** 是一个基于 Python 的本地化视频分析工具。它不仅仅是一个软件，更是一种 **"数据主权"** 的体现。
+### Agent 对话
+- ReactLoopAgent（ReAct 循环 + 思考链 + 工具调用）
+- SessionEvent append-only log，每步可追溯
+- Turn 15 phase 事件链（user_msg → plan → tool_pre → tool_exec → tool_post → tool_result → … → assistant_msg）
+- subagent director 三模式（foreground / background / continuable）+ 四级路由（call > role > default > inherit）
 
-### 为什么要开源这个？
-许多商业软件将 AI 功能封装在黑盒子里，按月收费，并上传您的隐私视频。我们不认同这种做法！😤
+### 视频分析（内置能力）
+- 三阶段流水线：OpenCV 智能抽帧 + Whisper 音频转录 + YOLOv11 物体检测 → LLM 推理 → MoviePy 剪辑 + GIF 摘要 + 数据图表
+- 跨视频向量知识库（ChromaDB 全局 collection + 自然语言搜索）
+- 模型支持：Ollama 本地 / OpenAI 格式 API / NVIDIA Integrate 多 key 轮换
 
-这个项目旨在证明：**只要有开源精神，普通开发者也能构建出媲美商业级的 AI 应用。**
+### 批量监控分析
+- motion_detector 1fps 抽帧 + scenedetect + 帧差分 + 昼夜自适应阈值，只送变化时段给 AI，省 99% API 调用
+- 二次验证防误判 + 断点续跑 + 跨会话记忆
+- skills 蒸馏（稀疏走廊 / 人多密集 / 夜间自适应），agent 按场景自动选 skill
 
-它融合了计算机视觉 (CV)、自动语音识别 (ASR) 和大语言模型 (LLM) 技术，像一个不知疲倦的助手，帮您把 1 小时的视频浓缩成 3 分钟的精华报告。
+### RTSP 实时流
+- RTSP 拉流 + 帧差预筛 + VLM 确认 + 命中回调投到 agent 对话
 
-**核心价值观：**
-*   **隐私至上：** 支持完全离线运行 (Ollama + 本地模型)。
-*   **极客精神：** 代码透明，逻辑清晰，欢迎修改。
-*   **他来他也行：** 降低 AI 开发门槛，让每个人都能享受编程的乐趣。
+### IM 网关
+- 微信 / Telegram / Discord adapter + IMMailbox SQLite lease/ack 投递箱
+- GatewayCipher AES 加密（条件依赖，缺失降级明文 + 告警）
+- Agent 可主动推消息到 IM 渠道（命中提醒 / 任务完成 / 异常告警）
 
----
+### 远程访问
+- Tailscale Serve / Direct / Cloudflare Access tunnel 三方案
+- RemoteManager 健康探活 + 自动重连
+- 从手机/平板访问桌面 Agent
 
-## ✨ 核心功能 (Features)
-
-*   **🧠 多模态 AI 分析：** 结合画面 (YOLOv11 识别物体)、声音 (Whisper 转录文本) 和语义 (LLM 总结)。
-*   **🤖 智能 Agent 面板：** 内置类似 DeepSeek R1 的思维链 (Chain of Thought) 组件，支持多轮对话，甚至可以指挥 AI "截图" 或 "剪辑"。
-*   **🎞️ 智能关键帧提取：** 告别机械截图，利用算法自动识别画面变化显著的关键时刻。
-*   **📊 可视化数据报表：** 生成包含亮度、清晰度、饱和度趋势的专业图表。
-*   **🎬 自动生成集锦：** AI 自动挑选精彩片段，拼接成短视频或 GIF 动图。
-*   **🔌 灵活的模型支持：**
-    *   **本地部署：** 支持 Ollama (Llama3, Qwen2.5 等) 和 GGUF 模型文件。
-    *   **云端调用：** 支持 OpenAI 格式 API (DeepSeek, GPT-4o, Claude 等)。
-    *   **NVIDIA Integrate 内置：** 11 key 轮换 + per-model 分片配置（Nemotron Omni 视频模型），客户端类型选「NVIDIA Integrate」即用。
-*   **🖥️ 现代化 GUI：** 基于 PyQt6 的深色主题界面，流畅丝滑，拒绝简陋。
-
-### v6.0 新增（监控批量分析 + 帧长图证据 + Agent 自主化）
-
-*   **🎞️ 批量监控分析：** 63 视频并发跑，motion_detector 1fps 抽帧 + scenedetect + 帧差分只送变化时段给 AI，**省 99% API 调用**；二次验证防误判；断点续跑。
-*   **🖼️ 帧长图证据：** 无变化视频也生成长图（20张/行横向铺满带 MM:SS 时间戳），可缩放 + 点击单帧 + 跳转播放器 + 问 AI，**解决伪证据盲区**。
-*   **🤖 Agent 自主化：** 对话驱动——用户提需求 → agent 自动选 skill（稀疏走廊/密集场景/夜间）→ 自动调 provider/key → per-model 切分片 → 每片跑完回调决策（继续/停/深挖）→ 跨会话记忆续跑。
-*   **🛡️ 安全强化：** 密钥环降级 UI 告警 + headless IP 限流（10 req/min）+ 弱 Token 警告 + 模型 SHA256 校验失败自动删除。
-*   **🎯 Skills 蒸馏：** 稀疏走廊 / 人多密集（YOLO 去重）/ 夜间自适应三场景 skill，agent 按场景自动匹配。
+### 插件生态
+- 声明式 YAML patch（`plugin.yaml`），社区可贡献插件
+- contextvars 替 Cordis fiber，轻量无重依赖
+- 运行时热插拔
 
 ---
 
-## 🚀 小白懒人安装教程 (Quick Start)
-
-别被代码吓跑了！只需三步，您也能运行起来！🏃‍♂️
+## 快速开始
 
 ### 1. 准备工作
-*   **安装 Python：** 请确保电脑安装了 Python 3.10 或更高版本。[下载地址](https://www.python.org/downloads/)
-*   **安装 FFmpeg：** 视频处理的核心。
-    *   *Windows:* 下载 FFmpeg 并配置环境变量 (或者软件会自动尝试下载)。
-    *   *Mac:* `brew install ffmpeg`
-    *   *Linux:* `sudo apt install ffmpeg`
+- **Python**：3.10 或更高（[下载](https://www.python.org/downloads/)）
+- **Node.js**：18+（用于 Electron 壳和 webapp，[下载](https://nodejs.org/)）
+- **FFmpeg**：视频处理核心（Windows 软件自带 imageio-ffmpeg，可免装；Mac `brew install ffmpeg`，Linux `sudo apt install ffmpeg`）
 
 ### 2. 下载项目
 ```bash
 git clone https://github.com/lza6/Video-Analysis-Pro-python.git
 cd Video-Analysis-Pro-python
 ```
-*(或者直接点击 GitHub 页面右上角的 `Code` -> `Download ZIP` 解压)*
 
-### 3. 一键启动 (Magic!) 🪄
-我们贴心地准备了自动配置脚本。
+### 3. 一键启动
 
-*   **Windows 用户：** 双击根目录下的 `启动应用.bat`。
-*   **Mac/Linux 用户：** 在终端运行 `python launcher.py`。
+**Windows 桌面版（唯一入口）**：双击根目录 `start-desktop.bat`
+- 自动检测 Node.js + 首次装 desktop 依赖（electron + electron-builder）
+- 清理上次残留进程（netstat 查 8000-8019 占用，只杀 python，不动系统服务）
+- 启动 Electron 壳 → spawn Python FastAPI 后端子进程 → BrowserWindow loadURL
+- 单实例 + 系统托盘 + 关窗口最小化到托盘
 
-**脚本会自动做什么？**
-1.  检测是否安装了 Python。
-2.  自动创建一个独立的虚拟环境 (`venv`)，不污染您的电脑。
-3.  自动安装所有依赖库 (`requirements.txt`)。
-4.  启动美观的图形界面。
-
----
-
-## 📖 使用指南 (User Guide)
-
-软件界面分为三个主要阶段 (Phase)，逻辑清晰：
-
-### 第一阶段：数据提取 (Phase 1)
-1.  **拖拽视频**到左侧区域。
-2.  设置**提取密度** (想要细致分析就调高，想要快速分析就调低)。
-3.  点击 **"🚀 开始提取数据"** 按钮。
-    *   *此时后台正在工作：OpenCV 抽帧、Whisper 听写音频、YOLO 识别物体。*
-
-### 第二阶段：AI 分析 (Phase 2)
-1.  在左上角选择模型 (推荐使用 Ollama 本地运行 `qwen2.5-vl` 或使用 API 连接 `DeepSeek-V3`)。
-2.  选择**提示词模板** (例如："内容总结"、"技术分析" 或 "情感识别")。
-3.  点击 **"🤖 生成 AI 总结"** 按钮。
-    *   *见证奇迹的时刻：AI 会阅读视频帧和字幕，写出一份详尽的报告。*
-
-### 第三阶段：媒体生成 (Phase 3)
-1.  点击 **"🎬 生成摘要媒体"** 按钮。
-    *   *软件会自动剪辑出视频的高光时刻，并生成 GIF 动图，方便您分享到社交媒体或插入演示文稿。*
-
-### 🤖 进阶玩法：与 Agent 对话
-点击右上角的 **🤖 图标**，打开 Agent 面板。您可以像与人聊天一样询问它：
-*   "帮我找一下视频里哪里出现了'猫'？" (AI 会调用视觉搜索工具)
-*   "把第 10 秒的画面截个图给我。"
-*   "这个视频的拍摄手法有什么问题？"
-
----
-
-## 🔬 技术原理大揭秘 (Technical Deep Dive)
-
-对于想学习技术的同学，这里是干货！📚
-
-### 1. 架构设计 (Architecture)
-采用经典的 **MVC (Model-View-Controller)** 变体架构：
-*   **UI 层 (View):** `src/ui/` 使用 `PyQt6` 构建。实现了复杂的自定义组件，如 `ThinkingWidget` (模拟思考过程)、`CarouselWidget` (画廊轮播)。
-*   **核心逻辑层 (Controller/Service):** `src/core/logic.py` 是大脑。它管理着 `VideoProcessor` (视频处理)、`AudioProcessor` (音频处理) 和 `VideoAnalyzer` (LLM 交互)。
-*   **工具层 (Model/Tools):** `src/core/agent_tools.py` 定义了 Agent 可以调用的 "工具"，例如 OCR 识别、网络搜索等。
-
-### 2. 关键技术栈 (Tech Stack)
-
-| 技术点 | 难度评级 | 作用 | 来源/原理 |
-| :--- | :---: | :--- | :--- |
-| **PyQt6** | ⭐⭐⭐ | 桌面 GUI 框架 | 信号与槽机制 (Signals & Slots) 实现界面不卡顿的异步更新。 |
-| **QThread** | ⭐⭐⭐ | 多线程处理 | 将耗时的视频分析放在后台线程，防止界面假死。 |
-| **YOLOv11** | ⭐⭐⭐⭐ | 目标检测 | 最新的实时物体检测算法，用于 "看" 懂画面里有什么。 |
-| **Faster-Whisper** | ⭐⭐⭐ | 语音转文字 | 基于 CTranslate2 加速的 Whisper 模型，速度飞快。 |
-| **Ollama** | ⭐⭐ | 本地 LLM 运行 | 让我们能轻松调用 Llama3, Qwen 等开源大模型。 |
-| **ReAct Agent** | ⭐⭐⭐⭐⭐ | 智能体逻辑 | 让 AI 懂得 "思考 -> 行动 -> 观察" 的循环，实现工具调用。 |
-| **Sentence-Transformers** | ⭐⭐⭐ | 语义搜索 (RAG) | 将视频帧转化为向量，实现 "以文搜图"。 |
-
-### 3. 核心流程图
-```mermaid
-flowchart TD
-    A["📤 用户上传视频"] --> B{"🎛️ Phase 1: 数据提取"}
-    
-    B --> C["🖼️ OpenCV 智能抽帧"]
-    B --> D["🔊 Whisper 音频转录"]
-    B --> E["📦 YOLO 物体检测"]
-    
-    C --> F["💾 结构化数据存储<br/>(本地缓存)"]
-    D --> F
-    E --> F
-    
-    F --> G{"🧠 Phase 2: AI 分析"}
-    G --> H["📝 构建智能提示词<br/>(帧信息+字幕)"]
-    H --> I["🤖 LLM 推理<br/>(Ollama/API)"]
-    I --> J["📄 生成 Markdown 报告"]
-    
-    F --> K{"🎬 Phase 3: 媒体生成"}
-    K --> L["✂️ MoviePy 智能剪辑<br/>高光片段"]
-    K --> M["🔄 生成 GIF 摘要"]
-    
-    J --> N["📊 可视化分析面板"]
-    L --> O["🎥 精彩集锦视频"]
-    
-    style A fill:#4CAF50,color:white
-    style B fill:#2196F3,color:white
-    style F fill:#9C27B0,color:white
-    style G fill:#FF9800,color:white
-    style I fill:#F44336,color:white
-    style K fill:#009688,color:white
+**Mac / Linux / 开发模式**：
+```bash
+cd desktop && npm start           # Electron 壳（会自动 spawn 后端）
+# 或单独后端（开发用）：
+python -m src.web.serve
+# 或前端独立开发：
+cd webapp && npm run dev
 ```
 
 ---
 
-## 📂 项目文件结构 (File Structure)
+## 架构总览
 
-方便 AI 爬虫和开发者快速理解仓库结构：
-
-```text
-Video-Analysis-Pro/
-├── 📂 src/                           # 源代码核心目录
-│   ├── 📂 core/                      # 核心逻辑
-│   │   ├── logic.py                  # 视频/音频/LLM 处理主逻辑
-│   │   ├── agent_tools.py            # Agent 工具集 (8 个工具 + KB 搜索)
-│   │   ├── history_manager.py        # SQLite + ChromaDB 跨视频知识库
-│   │   └── kb_indexer.py             # v4.5 知识库索引器 (QThread)
-│   ├── 📂 ui/                        # 界面代码 (PyQt6)
-│   │   ├── main_window.py            # 主窗口入口
-│   │   ├── agent_panel.py            # AI 对话侧边栏 (DeepSeek 式思考)
-│   │   ├── status_console.py         # 底部状态+资源监控(RAM/VRAM/模型MB)
-│   │   ├── carousel_widget.py        # 画廊轮播组件
-│   │   ├── timeline_widget.py        # 视频时间轴 (波形+帧标记)
-│   │   ├── video_player_dialog.py    # 专业播放器 (AI 叠加层)
-│   │   ├── model_manager_tab.py      # 模型下载/校验管理
-│   │   ├── help_dialog.py            # 使用说明
-│   │   └── api_intro_page.py         # API 获取指南
-│   ├── 📂 server/                    # v4.5 Headless 服务 (Docker)
-│   │   └── headless.py               # HTTP /analyze + /healthz
-│   └── 📂 utils/                     # 工具类
-│       ├── config_manager.py         # 配置+API Key 密钥环存储
-│       ├── constants.py              # 常量与版本(5.3.0)
-│       └── ui_components.py          # tkinter 安装向导
-├── 📂 models/                        # 存放本地模型文件 (.pt, .gguf)
-├── 📂 config/prompts/frame_analysis/ # 提示词模板 (video_summary/describe)
-├── 📂 logs/                          # 运行日志
-├── 📂 tests/                         # 测试套件 (135 tests)
-├── launcher.py                       # 🚀 主启动脚本 (版本门禁+venv)
-├── debug_launcher.py                 # 调试启动脚本
-├── requirements.txt                  # 核心依赖 (分层)
-├── requirements-ocr.txt              # 可选 OCR 依赖
-├── build_windows.spec                # PyInstaller 打包配置
-├── Dockerfile / Dockerfile.cuda      # Docker 镜像 (CPU/GPU)
-├── docker-compose.yml                # 编排 (含 GPU profile)
-├── 启动应用.bat                      # Windows 启动 (py 版本探测)
-├── 启动应用.sh                       # Linux/macOS 启动
-├── CHANGELOG.md                      # 变更日志
-└── README.md                         # 项目说明文档
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Electron 桌面壳 (desktop/)               │
+│  main.js + runtime-controller.js + preload.js + 托盘 + 更新   │
+└────────────────────────┬────────────────────────────────────┘
+                         │ spawn python src/web/serve.py
+                         │ + 健康探活 /healthz + 端口转发
+┌────────────────────────▼────────────────────────────────────┐
+│              FastAPI 后端 (src/web/ 12 router)               │
+│  health / analyze / metrics / media / models / agent /     │
+│  config / logs / decisions / skills / batch / surveillance │
+└──────┬───────────────────────────────────┬─────────────────┘
+       │                                   │
+       ▼                                   ▼
+┌──────────────────┐              ┌──────────────────────┐
+│  Agent 框架      │              │  Next.js 前端        │
+│  (src/core/      │              │  (webapp/ 13 页)     │
+│   agent/tools/   │              │  Next 16 + React 19  │
+│   subagent/      │              │  + Tailwind v4       │
+│   credentials/   │              │  玻璃拟态            │
+│   plugins/)      │              └──────────────────────┘
+└────┬──────┬──────┬─────────────┘
+     │      │      │
+     ▼      ▼      ▼
+┌──────┐ ┌──────┐ ┌──────────────┐
+│ IM   │ │ 远程 │ │ 视频分析核心 │
+│ 网关 │ │ 访问 │ │ (logic.py)   │
+│      │ │      │ │ 三阶段流水线 │
+│ 微信 │ │ TS   │ └──────────────┘
+│ TG   │ │ CF   │
+│ DC   │ │ Dir  │
+└──────┘ └──────┘
 ```
 
----
-
-## ⚖️ 优缺点与适用场景 (Pros & Cons)
-
-### ✅ 优点 (Pros)
-1.  **隐私安全：** 视频不出本地，无需担心机密泄露。
-2.  **零成本：** 依托开源模型，无需支付昂贵的 API 费用。
-3.  **可扩展性强：** 代码结构清晰，添加功能简单 (如人脸识别)。
-4.  **用户体验佳：** 相比 Web 界面 (Gradio/Streamlit)，PyQt6 桌面应用响应更快，交互更丰富。
-
-### ❌ 缺点/不足 (Cons)
-1.  **硬件要求：** 本地运行大模型和 YOLO 需要一定的显卡 (推荐 NVIDIA GPU)，纯 CPU 运行速度较慢。
-2.  **环境依赖：** 安装 FFmpeg 和 CUDA 环境对初学者可能有一定门槛 (尽管我们尽力自动化了)。
-3.  **目前仅支持 Python：** 尚未打包成 `.exe` 或 `.dmg`，需要安装 Python 环境。
-
-### 🎯 适用场景
-*   **自媒体创作者：** 快速提取爆款视频文案和精彩片段。
-*   **会议记录员：** 自动整理 Zoom/腾讯会议录屏纪要。
-*   **安防监控：** 快速检索监控视频中的特定目标。
-*   **学生群体：** 几分钟内快速了解长视频课程的核心内容。
+| 层 | 目录 | 说明 |
+|----|------|------|
+| Electron 壳 | `desktop/` | 主进程 + Python 子进程托管 + 单实例 + 托盘 + 自动更新 |
+| FastAPI 后端 | `src/web/` | 12 router + SSE 流式 + uvicorn |
+| Next.js 前端 | `webapp/` | 13 页 + 静态导出 + 玻璃拟态 |
+| Agent 框架 | `src/core/agent/` | ReactLoopAgent + Session + Turn |
+| 工具系统 | `src/core/tools/` | ToolDefinition + 四 waterfall + ParallelExecutor |
+| Subagent | `src/core/subagent/` | Director + RoleTemplate + 三模式 |
+| 凭据 | `src/core/credentials/` | env > keyring > ini 分层 |
+| 插件 | `src/core/plugins/` | contextvars + 声明式 YAML patch |
+| IM 网关 | `src/core/im_gateway/` | Mailbox + Cipher + 三 adapter |
+| 远程访问 | `src/remote/` | Tunnel 抽象 + 三方案 + RemoteManager |
+| 视频核心 | `src/core/logic.py` | 三阶段流水线（内置 Agent 工具集） |
 
 ---
 
-## 🛠️ 开发者蓝图与扩展 (Developer Blueprint)
+## 安装与开发
 
-如果您是开发者，或想让 AI 学习这个项目，以下是**技术路径要点**：
+### 后端（Python）
+```bash
+python -m venv venv
+# Windows: venv\Scripts\activate
+# Mac/Linux: source venv/bin/activate
+pip install -r requirements.txt          # core
+# 或全量（含可选 OCR）：
+pip install -r requirements-ocr.txt
+```
 
-1.  **如何复刻？**
-    *   先运行 `launcher.py` 中的虚拟环境创建逻辑。
-    *   理解 `src/ui/main_window.py` 中的 `QThread` 信号槽机制，这是界面不卡顿的关键。
-    *   重点查看 `src/core/logic.py` 中的 `VideoAnalyzer` 类，它是连接视觉模型和语言模型的桥梁。
+### 前端（webapp/）
+```bash
+cd webapp
+npm install
+npm run dev          # 开发模式 http://localhost:3000
+npm run build        # 静态导出 → webapp/out/
+```
 
-2.  **待实现/改进点 (TODOs)：**
-    *   [ ] **打包发布：** 使用 PyInstaller 将项目打包成单文件执行程序。
-    *   [ ] **多语言支持：** 目前 UI 主要是中文，可扩展国际化支持。
-    *   [ ] **人脸识别：** 集成 InsightFace，识别具体人物。
-    *   [ ] **实时流处理：** 支持 RTSP 摄像头实时分析 (目前仅支持离线文件)。
-    *   [ ] **Web 版本：** 将核心逻辑剥离，使用 FastAPI + React 重构为 Web 应用。
+### Electron 壳（desktop/）
+```bash
+cd desktop
+npm install
+npm run dev          # 开发模式（需后端已启动）
+npm run dist         # 打包 Windows 安装包
+```
 
-3.  **给 AI 爬虫的提示：**
-    *   关注 `src/core/agent_tools.py` 中的 `ToolRegistry`，这是实现 ReAct Agent 的核心模式。
-    *   关注 `src/ui/agent_panel.py` 中的 `ThinkingWidget`，这是实现类似 DeepSeek 思考过程可视化的 UI 组件。
+### 配置
+复制 `.env.example` 为 `.env`，填入：
+- `VAP_LLM_API_KEY` / `VAP_LLM_BASE_URL` / `VAP_LLM_MODEL`（LLM 凭据）
+- `VAP_NV_API_KEYS`（NVIDIA 11 key，逗号分隔，可选）
+- `VAP_IM_GATEWAY_MASTER_KEY`（IM 网关 AES 主密钥，可选）
+- `VAP_IM_ADAPTERS`（启用的 IM adapter，可选）
+- `VAP_TUNNEL_PROVIDER`（远程访问方案，可选）
+
+API Key 优先存 OS 密钥环（Windows DPAPI / macOS Keychain / Linux SecretService），降级 ini + 告警，**绝不入库**。
 
 ---
 
-## 🔮 未来展望与待办 (Roadmap)
+## 打包发布
 
-我们计划将 Video Analysis Pro 打造成**全能的本地多媒体大脑**。
+```bash
+# Electron 桌面安装包（推荐分发形态）
+cd desktop && npm run dist
 
-*   **v4.5 ✅ 已发布 (2026-09-03):** 跨视频向量知识库 (ChromaDB 全局 collection + 自然语言跨视频搜索 + Agent search_kb 工具)、可分发软件包 (PyInstaller onedir + 内置 FFmpeg)、Docker 部署 (CPU/CUDA + headless HTTP 服务)、跨平台入口 (Win/Linux/macOS)、API Key 密钥环存储 + 模型 SHA256 校验、全部 P0/P1 修复 + 59 个 E2E 测试。详见 `CHANGELOG.md`。
-*   **v5.1 ✅ 已发布 (2026-09-04):** 黑匣子透明化（eli5 大白话解释 + 决策日志面板）、监控分析/Skills/决策日志三 tab 挂载（7→10 tab）、headless Bearer Token 鉴权、Phase 3 摘要媒体链路恢复（seaborn 依赖修复）。
-*   **v5.2 ✅ 已发布 (2026-09-04):** Agent 提示词八段增补（对照 CL4R1T4S：Agent Loop/思考块/意图澄清/时间戳引用/失败求助/notify-ask/并行/意图前置）、skills 触发注入、用户偏好个性化。
-*   **v5.3 ✅ 已发布 (2026-09-04):** 发布一致性收口（APP_VERSION 对齐 tag、CHANGELOG 补 v5.1/v5.2、e2e_smoke 断言 14→28 项覆盖新 tab 与提示词段落）。
-*   **v5.4 计划:** 语音克隆 (TTS)，让生成的总结报告可以 "读" 出来。
-*   **长期目标:** 实现完全的插件化系统，让社区开发者可以上传自己的分析插件。
+# Web 版 Docker 镜像
+docker build -t tingfeng-hermes .           # CPU
+docker build -f Dockerfile.cuda -t tingfeng-hermes:cuda .   # GPU
+docker compose up
+
+# 前端静态导出
+cd webapp && npm run build
+```
+
+CI 在打 `v*` tag 时触发 `build-windows` job：全量测试 + electron-builder + 上传 artifact。
 
 ---
 
-## 📜 开源协议 (License)
+## 开源协议
 
 本项目采用 **GNU General Public License v3.0 (GPL-3.0)**。
 
-这意味着：
-*   您可以免费使用、复制、修改本项目。
-*   如果您修改了代码并发布，**您也必须开源您的修改代码** (传染性)。
-*   让我们一起维护开源社区的繁荣！🤝
+- 您可以免费使用、复制、修改本项目
+- 如果您修改了代码并发布，**您也必须开源您的修改代码**（传染性）
+- 让我们一起维护开源社区的繁荣
 
 ---
 
-**🎉 感谢您的阅读！**
-如果您觉得这个项目有趣，请给一个 ⭐ **Star** 鼓励一下！您的支持是我们持续开发的最大动力！💖
+**感谢您的阅读！** 如果觉得这个项目有趣，请给一个 Star 鼓励一下。
 
-*(Project maintained by lza6)*
+*(Project maintained by lza6 · 听风公司 (Tingfeng) 出品)*
 
 ---
-*文档最后更新：2026-09-04 (v5.3.0)*
+
+*文档最后更新：2026-09-06 (v10.0.0)*

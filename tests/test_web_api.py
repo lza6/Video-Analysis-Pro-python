@@ -24,7 +24,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# torch 必须先于 PyQt6/FastAPI 导入(Windows DLL 顺序铁律)
+# torch 必须先于 FastAPI 导入(Windows DLL 顺序铁律,与 Qt 无关)
 try:
     import torch  # noqa: F401
 except OSError:

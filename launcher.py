@@ -83,6 +83,12 @@ for package in required_packages:
             import gradio 
         elif package == 'qdarktheme':
             import qdarktheme
+        elif package == 'sse_starlette':
+            import sse_starlette
+        elif package == 'multipart':
+            import multipart
+        elif package == 'pydantic_settings':
+            import pydantic_settings
         else:
             importlib.import_module(package)
     except ImportError as e:
@@ -213,7 +219,7 @@ if __name__ == "__main__":
     )
 
     # --- Python 版本检查（软门禁）---
-    # 历史行为：3.13+ 无 wheel 时硬退出。实测 2026 年主流依赖（PyQt6/torch/chromadb）
+    # 历史行为：3.13+ 无 wheel 时硬退出。实测 2026 年主流依赖（torch/chromadb）
     # 在 3.14 已有 wheel 且现有 venv 工作正常 → 改为软警告：记录日志不阻断，
     # 仅在后续"安装依赖"失败时用户才知道需要降级。
     if not (3, 10) <= sys.version_info[:2] < (3, 13):

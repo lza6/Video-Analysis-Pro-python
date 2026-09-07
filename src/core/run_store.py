@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
@@ -138,6 +139,20 @@ class RunStore:
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_runs_status "
                 "ON runs(status)"
+            )
+            # checkpoints 表：长程断点续跑能力，存最近 checkpoint
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS checkpoints (
+                    run_id   TEXT NOT NULL,
+                    phase    TEXT NOT NULL,
+                    payload  TEXT,
+                    ts       TEXT NOT NULL
+                )
+            """)
+            # 按 run_id 查 checkpoint 是最高频路径；ts 倒序读最近一条
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_checkpoints_run_id "
+                "ON checkpoints(run_id, ts DESC)"
             )
             conn.commit()
 
@@ -454,3 +469,86 @@ class RunStore:
             conn.commit()
         logger.info("clear_all: removed %d runs (purge_files=%s)", count, purge_files)
         return count
+
+    # ------------------------------------------------------------------
+    # checkpoint：长程断点续跑（最近一次 phase + payload）
+    # ------------------------------------------------------------------
+    def checkpoint(self, run_id: str, phase: str, payload: Dict[str, Any]) -> None:
+        """存最近 checkpoint 到 checkpoints 表。
+
+        语义：长程批量分析任务在关键 phase（抽帧/转录/检测/推理/剪辑）
+        落盘当前进度，断点续跑时由 restore(run_id) 读回最近一条。每次调用
+        追加一行（不覆盖旧行），restore/list 按 ts 倒序读最新。
+
+        payload 是 dict，json.dumps 存；run_id/phase 为空时 ValueError。
+        """
+        if not run_id or not phase:
+            raise ValueError("run_id 和 phase 不能为空")
+        ts = _now_iso()
+        payload_json = json.dumps(payload, ensure_ascii=False)
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO checkpoints (run_id, phase, payload, ts)
+                   VALUES (?, ?, ?, ?)""",
+                (run_id, phase, payload_json, ts),
+            )
+            conn.commit()
+
+    def restore(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """读最近一条 checkpoint。无则返回 None。
+
+        返回 {phase, payload, ts}，payload 自动 json.loads 还原为 dict。
+        """
+        with self._connect() as conn:
+            cur = conn.execute(
+                """SELECT phase, payload, ts FROM checkpoints
+                   WHERE run_id = ? ORDER BY ts DESC LIMIT 1""",
+                (run_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            payload_raw = row["payload"]
+            payload: Any = json.loads(payload_raw) if payload_raw else {}
+            return {
+                "phase": row["phase"],
+                "payload": payload,
+                "ts": row["ts"],
+            }
+
+    def list_checkpoints(self, run_id: str) -> List[Dict[str, Any]]:
+        """列出该 run 的所有 checkpoint，按 ts 倒序（最近在前）。
+
+        用于调试与 UI 渲染断点时间线。返回空列表表示无 checkpoint。
+        """
+        with self._connect() as conn:
+            cur = conn.execute(
+                """SELECT phase, payload, ts FROM checkpoints
+                   WHERE run_id = ? ORDER BY ts DESC""",
+                (run_id,),
+            )
+            rows = cur.fetchall()
+        result: List[Dict[str, Any]] = []
+        for r in rows:
+            payload_raw = r["payload"]
+            payload: Any = json.loads(payload_raw) if payload_raw else {}
+            result.append({
+                "phase": r["phase"],
+                "payload": payload,
+                "ts": r["ts"],
+            })
+        return result
+
+    def clear_checkpoints(self, run_id: str) -> None:
+        """删该 run 的所有 checkpoint（任务完成后清理）。
+
+        不返回删除数（调用方语义是"清干净"，不需要计数）。run_id 为空
+        时静默不删（防误清全表）。
+        """
+        if not run_id:
+            return
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM checkpoints WHERE run_id = ?", (run_id,)
+            )
+            conn.commit()

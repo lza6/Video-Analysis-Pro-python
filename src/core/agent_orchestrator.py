@@ -6,7 +6,7 @@
   - 对话式配 key：configure_provider_dialog 引导 + 测活性 + 入库
   - 帮下模型：download_model_dialog 调 ModelManager + SHA256 校验
 
-纯逻辑层（不依赖 PyQt6），由 main_window 的 ChatWorker / AgentDialog 调用。
+纯逻辑层(无 Qt 依赖),由 Web 后端 agent 路由调用。
 不真实调付费 API（红线）：provider 配置只测活性（list_models 一次 GET），
 下载模型走 ModelManager.download_model（已含 SHA256 校验）。
 
@@ -485,7 +485,7 @@ class AgentOrchestrator:
         )
 
 
-# ------------------------------------------------------------------ 构建系统提示（供 main_window 复用）
+# ------------------------------------------------------------------ 构建系统提示（供 Web agent 路由复用）
 
 def format_memory_text(memory: dict) -> str:
     """把 load_session_memory 返回的结构化记忆转成人类可读文本（≤500 字）。
@@ -543,8 +543,8 @@ def build_agent_system_prompt(tool_descriptions: str = "",
                               active_skills: Optional[str] = None) -> str:
     """组装 agent system prompt（薄包装，复用 agent_prompt.build_system_prompt）。
 
-    main_window.on_agent_query 已直接调 build_system_prompt，本函数供
-    orchestrator 单测和将来扩展（如注入对话历史摘要）使用。
+    Web agent 路由已直接调 build_system_prompt，本函数供 orchestrator 单测
+    和将来扩展（如注入对话历史摘要）使用。
     """
     return build_system_prompt(
         tool_descriptions=tool_descriptions,
@@ -559,14 +559,14 @@ _TOOL_RE = re.compile(r'<tool name="(\w+)">(.*?)</tool>', re.DOTALL)
 
 
 def parse_tool_call(llm_output: str) -> Optional[tuple[str, dict]]:
-    """从 LLM 输出解析首个工具调用（XML 格式，与 ChatWorker 一致）。
+    """从 LLM 输出解析首个工具调用（XML 格式，与 Web agent 路由一致）。
 
     返回 (tool_name, args_dict) 或 None。args 既支持 JSON 也支持位置参数。
     纯函数，可单测。
     """
     if not llm_output:
         return None
-    # 先剥思考段（<think>...</think>），与 ChatWorker 一致
+    # 先剥思考段(闭合标签),与 Web agent 路由一致
     cleaned = re.sub(r'<think>.*?</think>', '', llm_output, flags=re.DOTALL)
     match = _TOOL_RE.search(cleaned)
     if not match:

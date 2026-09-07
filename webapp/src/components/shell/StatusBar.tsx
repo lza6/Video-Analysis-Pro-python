@@ -1,21 +1,37 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiUrl } from "@/lib/api";
 import type { HealthResponse } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
  * 底部状态条:能力矩阵 + 磁盘余量 + 资源占用(轮询 /api/health)。
- * 取代 PyQt6 的 StatusConsole。
+ * StatusConsole 的 Web 等价物。
+ *
+ * 轮询策略(用户启动日志实证:空闲时 /api/health 每页 mounted 都打):
+ *  - 标签页可见时 15s 一跳(原 5s 过频,空闲也持续打后端);
+ *  - 标签页隐藏时暂停(visibilitychange),回来立即补一次;
+ *  - 失败时指数退避(15→30→60s 封顶),避免后端宕时疯狂重连。
  */
+const BASE_INTERVAL_MS = 15_000;
+const MAX_INTERVAL_MS = 60_000;
+
 export function StatusBar() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
+  const backoffRef = useRef<number>(BASE_INTERVAL_MS);
 
   useEffect(() => {
     let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
     const tick = async () => {
+      // 标签页隐藏时不轮询,等 visibility 回来再补
+      if (typeof document !== "undefined" && document.hidden) {
+        schedule();
+        return;
+      }
       try {
         const res = await fetch(apiUrl("/api/health"), { cache: "no-store" });
         if (!res.ok) throw new Error(String(res.status));
@@ -23,16 +39,35 @@ export function StatusBar() {
         if (alive) {
           setHealth(data);
           setOnline(true);
+          backoffRef.current = BASE_INTERVAL_MS; // 成功则重置退避
         }
       } catch {
         if (alive) setOnline(false);
+        // 失败指数退避,封顶 MAX_INTERVAL_MS
+        backoffRef.current = Math.min(backoffRef.current * 2, MAX_INTERVAL_MS);
+      }
+      schedule();
+    };
+
+    const schedule = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(tick, backoffRef.current);
+    };
+
+    const onVisible = () => {
+      if (!document.hidden) {
+        backoffRef.current = BASE_INTERVAL_MS;
+        if (timer) clearTimeout(timer);
+        void tick();
       }
     };
-    tick();
-    const id = setInterval(tick, 5000);
+
+    void tick();
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       alive = false;
-      clearInterval(id);
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 

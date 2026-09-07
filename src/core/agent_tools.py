@@ -417,8 +417,8 @@ def create_image_search_tool(app_context_getter):
 
 
 # --- v5.8 断点 B5：SURVEILLANCE intent 桥接工具（真触发 batch_runner）---
-# scan_videos 同步扫目录；batch_analyze 触发 main_window.start_batch（异步，
-# 真跑付费 API 由用户在批量 tab 确认）；summarize_hits 读 run_store 命中。
+# scan_videos 同步扫目录；batch_analyze 触发批量分析（异步，真跑付费 API 由
+# 用户在批量 tab 确认）；summarize_hits 读 run_store 命中。
 
 # 支持的视频扩展名（与 batch_runner.SUPPORTED_VIDEO_EXTS 对齐）
 _VID_EXTS = (".mp4", ".avi", ".mov", ".mkv")
@@ -457,7 +457,7 @@ def create_batch_analyze_trigger_tool(app_context_getter):
         if not app:
             return "App context missing."
         if not hasattr(app, 'start_batch'):
-            return "main_window 未实现 start_batch 方法，无法触发批量分析。"
+            return "批量入口未配置（start_batch 未实现），无法触发批量分析。"
         return app.start_batch(video_dir, item_description)
     return trigger_batch
 
@@ -628,4 +628,75 @@ def create_trace_item_tool(app_context_getter):
                 )
         return "\n".join(lines)
     return trace_item
+
+
+# --- v10.0.0 VLM 视觉理解：描述关键帧（指南 9.1）---
+
+def create_vlm_describe_tool(app_context_getter, vlm_client_getter=None):
+    """用 VLM 描述指定时间戳的关键帧（v10.0.0 视觉理解接入）。
+
+    把当前 job 的某一帧（按 seconds 取最近）+ 用户 prompt 喂给 VLMClient，
+    返回 VLM 对画面内容的自然语言描述（如"画面中有两名人员，左下角有一个
+    黑色背包"）。支持 Agent 在三阶段流水线外做细粒度视觉问答。
+
+    vlm_client_getter: 返回 VLMClient 实例的 callable（接 Ollama/Cloud/Mock）。
+        None 时尝试从 app.vlm_client 读取；均缺失则降级提示"VLM 未配置"，
+        不抛异常（守付费 API 红线：无真实 key 时不阻塞 Agent）。
+    """
+    def vlm_describe(seconds: float = 0.0, prompt: str = "描述这个画面中的关键内容。"):
+        app = app_context_getter()
+        if not app:
+            return "App context missing."
+        # 取 VLM 客户端
+        vlm = None
+        if vlm_client_getter is not None:
+            try:
+                vlm = vlm_client_getter()
+            except Exception as e:
+                return f"VLM 客户端构造失败：{e}"
+        if vlm is None:
+            vlm = getattr(app, 'vlm_client', None)
+        if vlm is None:
+            return ("VLM 未配置。请在 .env 设置 VAP_VLM_PROVIDER=ollama/cloud "
+                    "并配相应 base_url/api_key，或传 vlm_client_getter。")
+        # 取最近帧
+        frame_path = None
+        if hasattr(app, 'frames') and app.frames:
+            try:
+                sec = float(seconds)
+                closest = min(app.frames, key=lambda f: abs(f.timestamp - sec))
+                frame_path = str(closest.path)
+            except Exception:
+                frame_path = None
+        if frame_path is None:
+            return f"未找到 {seconds}s 附近的帧，无法送 VLM。"
+        try:
+            from pathlib import Path
+            image_bytes = Path(frame_path).read_bytes()
+        except Exception as e:
+            return f"读取帧 {frame_path} 失败：{e}"
+        # 调 VLM（async describe，本工具是同步，用 asyncio.run 跑）
+        try:
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop is not None:
+                # 已在 event loop 内（如 ReactLoopAgent）——用线程跑
+                import threading
+                from concurrent.futures import Future
+                fut: Future = Future()
+                def _run():
+                    try:
+                        result = asyncio.run(vlm.describe(image_bytes, prompt))
+                        fut.set_result(result)
+                    except Exception as e:
+                        fut.set_exception(e)
+                threading.Thread(target=_run, daemon=True).start()
+                return fut.result(timeout=120)
+            return asyncio.run(vlm.describe(image_bytes, prompt))
+        except Exception as e:
+            return f"VLM 描述失败：{e}"
+    return vlm_describe
 

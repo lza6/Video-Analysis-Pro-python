@@ -1,0 +1,15 @@
+[Application]
+theme = Dark
+version = 10.0.0
+show_agent_panel = True
+
+[Environment]
+# 运行时填本机 venv 绝对路径；首次启动 launcher 会自动建 venv
+venv_path =
+
+[LastUsed]
+client_type = 1
+api_url = https://api.iflow.cn/v1
+# api_key 永远留空——真实密钥走 keyring（Windows DPAPI / macOS Keychain / Linux SecretService），不入库
+api_key =
+model_name =

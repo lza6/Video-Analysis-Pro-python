@@ -1,7 +1,7 @@
 """DecisionLog + eli5 决策日志核心模型测试（6 测试）。
 
 隔离原则：
-  - 不依赖 PyQt6 / torch / CLIP（纯数据模型，无 GUI）
+  - 不依赖 Qt / torch / CLIP（纯数据模型，无 GUI）
   - tmp_path 隔离落盘文件，不污染仓库
   - reason 空串校验、不可变追加、JSON 往返、原子写 .tmp 不残留
 """

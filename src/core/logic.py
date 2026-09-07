@@ -1038,11 +1038,11 @@ class APIGatewayClient(BaseAPIClient):
     def _prompt_to_messages(self, prompt: str) -> List[Dict[str, Any]]:
         """单轮 str prompt → messages。
 
-        过渡兼容：旧链路 main_window.inject_agent_system_context 仍把视频上下文
-        拼成 "--- System Context ---\\n...\\n--------------------\\n" 字符串塞进 prompt。
+        兼容旧链路:上层调用方曾把视频上下文拼成
+        "--- System Context ---\\n...\\n--------------------\\n" 字符串塞进 prompt。
         这里把它解析成标准 OpenAI Chat Completions 的 system+user 双消息结构，
         而非把分隔符原样塞进单条 user content（P2-2：消除字符串分隔符脆弱协议）。
-        未来 main_window 改用 build_system_prompt + 结构化 context 后可移除此分支。
+        未来调用方改用 build_system_prompt + 结构化 context 后可移除此分支。
         """
         if "--- System Context ---" in prompt:
             parts = prompt.split("--- System Context ---", 1)

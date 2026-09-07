@@ -5,11 +5,17 @@
 
 每个 JobRecord 持有一个 asyncio.Queue,SSE 端点 await queue.get(),
 后台分析线程通过 loop.call_soon_threadsafe 把事件推入队列。
+
+v10.2.0:SSE 断线续连。每个事件带自增 seq,JobRecord 维护
+last_event_seq + recent_events 环形缓冲(最近 100 条带 seq 的快照)。
+客户端断线重连时带 Last-Event-ID,服务端从 recent_events 重放
+seq > last_event_id 的事件,再继续 live 流。
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -18,6 +24,10 @@ from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger("web.job_store")
+
+# recent_events 环形缓冲容量。最近 N 条带 seq 的事件快照,供断线重连续推。
+# 太小:长断线丢事件;太大:内存占用。100 条够覆盖一次心跳周期 + 重连窗口。
+RECENT_EVENTS_CAP = 100
 
 
 class JobStatus(str, Enum):
@@ -59,6 +69,49 @@ class JobRecord:
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=0))
     # 标记事件流是否已关闭(收到 __close__)
     stream_closed: bool = False
+    # ── SSE 断线续连(v10.2.0)──
+    # 最近发出的事件 seq(单调递增,每次 put 自增)。Last-Event-ID 比对基准。
+    last_event_seq: int = 0
+    # 环形缓冲:最近 RECENT_EVENTS_CAP 条带 seq 的事件快照。
+    # 重连时按 seq > last_event_id 过滤后重放,避免丢事件。
+    # 元素结构:{"seq": int, "type": str, "data": dict}
+    recent_events: list[dict] = field(default_factory=list)
+    # 保护 last_event_seq + recent_events 的锁(后台线程 call_soon_threadsafe
+    # 与 SSE 端点并发读写,需互斥)。queue 自身线程安全,但 seq + 缓冲需一致快照。
+    _seq_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def put_event(self, event_type: str, data: dict) -> int:
+        """线程安全地推事件到 queue + 维护 seq/缓冲。返回该事件 seq。
+
+        由 analyzer_service.push / batch / surveillance 等后台线程调用,
+        经 loop.call_soon_threadsafe 调度到主 loop。本方法在主 loop 线程执行,
+        但 SSE 端点也可能并发读 recent_events,故仍加锁保一致。
+
+        __close__ 哨兵不分配 seq 也不入缓冲(它是流结束信号,不应重放)。
+        """
+        with self._seq_lock:
+            if event_type == "__close__":
+                # 哨兵不入缓冲,直接入队。无 seq。
+                self.queue.put_nowait({"type": event_type, "data": data, "seq": None})
+                return 0
+            self.last_event_seq += 1
+            seq = self.last_event_seq
+            snapshot = {"seq": seq, "type": event_type, "data": data}
+            self.recent_events.append(snapshot)
+            # 环形缓冲:超容量丢弃最旧
+            if len(self.recent_events) > RECENT_EVENTS_CAP:
+                del self.recent_events[: len(self.recent_events) - RECENT_EVENTS_CAP]
+        self.queue.put_nowait({"type": event_type, "data": data, "seq": seq})
+        return seq
+
+    def replay_since(self, last_event_id: int) -> list[dict]:
+        """返回 recent_events 中 seq > last_event_id 的快照(按 seq 升序)。
+
+        客户端断线重连带 Last-Event-ID,服务端先重放这些事件再继续 live 流。
+        加锁保证读到一致快照(并发 put 不会撕裂 list)。
+        """
+        with self._seq_lock:
+            return [e for e in self.recent_events if (e.get("seq") or 0) > last_event_id]
 
     def summary(self) -> dict:
         """非流式摘要(不含 queue)。"""

@@ -30,7 +30,10 @@ class Settings(BaseSettings):
 
     # --- 服务 ---
     port: int = Field(8000, description="Web 服务端口")
-    host: str = Field("0.0.0.0", description="监听地址;本地用 127.0.0.1 更安全")
+    # 安全默认:127.0.0.1 仅 loopback,纯本地桌面/开发免 token。
+    # 对外暴露(0.0.0.0 / 局域网 IP)时 serve.py 守卫强制要求 VAP_HEADLESS_TOKEN,
+    # 防"监听所有网卡 + 鉴权关闭"并存(用户日志实证的安全洞)。
+    host: str = Field("127.0.0.1", description="监听地址;对外暴露需配 token")
 
     # --- 鉴权(可选)---
     # 空 = 鉴权关闭(仅本地用安全);非空 = Bearer Token,建议 >=32 字符随机串

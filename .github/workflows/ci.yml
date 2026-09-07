@@ -24,7 +24,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pytest pytest-cov
-          pip install PyQt6 pyqtdarktheme opencv-python-headless numpy scenedetect moviepy imageio-ffmpeg markdown2 requests psutil pydub pillow duckduckgo-search
+          pip install opencv-python-headless numpy scenedetect moviepy imageio-ffmpeg markdown2 requests psutil pydub pillow duckduckgo-search
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install chromadb || true
       - name: Static check (ruff)
@@ -36,12 +36,81 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           PYTHONIOENCODING: utf-8
         run: |
-          python -m pytest tests/ -q --ignore=tests/test_headless_server.py --ignore=tests/test_e2e_smoke.py || true
+          python -m pytest tests/ -q \
+            --ignore=tests/test_headless_server.py \
+            --ignore=tests/test_e2e_smoke.py \
+            --cov=src --cov-report=term-missing --cov-fail-under=80
           # 完整套件需要全量依赖 (ultralytics/faster-whisper 等)，这里跑可独立运行的子集；
           # 全量验证在打包 job 中执行。
+          # v10.1.0: 去 `|| true`,CI 真实失败阻断 + 加覆盖率门禁 ≥80%。
+
+  e2e:
+    needs: test
+    if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: webapp/package-lock.json
+      - name: Install backend deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Install webapp deps
+        run: |
+          cd webapp
+          npm ci
+      - name: Install Playwright chromium
+        run: |
+          cd webapp
+          npx playwright install --with-deps chromium
+      - name: Build webapp static export
+        run: |
+          cd webapp
+          npm run build
+      - name: Start backend on :8001
+        shell: pwsh
+        run: |
+          $env:VAP_PORT = "8001"
+          $proc = Start-Process -FilePath "python" -ArgumentList "-m","src.web.serve","--no-browser","--port","8001" -PassThru -WindowStyle Hidden
+          $deadline = (Get-Date).AddSeconds(30)
+          $ok = $false
+          while ((Get-Date) -lt $deadline) {
+            try {
+              $r = Invoke-WebRequest -Uri "http://127.0.0.1:8001/api/health" -UseBasicParsing -TimeoutSec 3
+              if ($r.StatusCode -eq 200) { $ok = $true; break }
+            } catch { Start-Sleep -Milliseconds 500 }
+          }
+          if (-not $ok) {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            throw "Backend /api/health not ready within 30s"
+          }
+          echo "BACKEND_PID=$($proc.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Run E2E
+        run: |
+          cd webapp
+          npm run e2e
+      - name: Stop backend
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:BACKEND_PID) { Stop-Process -Id $env:BACKEND_PID -Force -ErrorAction SilentlyContinue }
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: webapp/playwright-report/
+          retention-days: 14
 
   build-windows:
-    needs: test
+    needs: [test, e2e]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     steps:

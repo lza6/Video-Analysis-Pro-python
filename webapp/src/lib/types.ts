@@ -183,6 +183,8 @@ export interface AgentChatResponse {
   skill_name?: string;
   plan_steps?: PlanStep[];
   reply: string;
+  /** 有 plan 步且非 GENERAL 时为 true,前端据此自动循环调 /api/agent/run */
+  auto_run?: boolean;
 }
 
 export interface AgentRunStep {
@@ -195,4 +197,98 @@ export interface AgentRunStep {
 export interface AgentRunResponse {
   done: boolean;
   step: AgentRunStep | null;
+}
+
+/** SSE event: /api/agent/run_stream 流式逐步执行。 */
+export type AgentRunStreamType = "step" | "done";
+
+export interface AgentRunStreamStepEvent {
+  index: number;
+  description: string;
+  tool: string | null;
+  result: string | null;
+  status: string | null;
+}
+
+export interface AgentRunStreamDoneEvent {
+  step: null;
+  total: number;
+  reason?: string;
+}
+
+// ============================ requests / providers (F7) ============================
+
+/** 单条 LLM 请求日志(与 src/core/request_log.py RequestLog + list_logs 返回对齐)。 */
+export interface RequestLog {
+  log_id: string;
+  timestamp: string;
+  provider: string;
+  model: string;
+  key_id: string;
+  status_code: number | null;
+  latency_ms: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  error: string;
+  request_preview: string;
+  response_preview: string;
+}
+
+/** /api/requests GET 响应。 */
+export interface RequestListResponse {
+  requests: RequestLog[];
+  count: number;
+  error?: string;
+}
+
+/** 单个 provider 的 token 聚合统计。 */
+export interface ProviderStat {
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  avg_latency_ms: number;
+  error_count: number;
+}
+
+/** /api/requests/stats GET 响应:按 provider 名聚合。 */
+export interface RequestStatsResponse {
+  providers: Record<string, ProviderStat>;
+  error?: string;
+}
+
+/** /api/requests DELETE 响应。 */
+export interface RequestClearResponse {
+  ok: boolean;
+  deleted?: number;
+  error?: string;
+}
+
+export type ProviderType =
+  | "openai"
+  | "anthropic"
+  | "gemini"
+  | "ollama"
+  | "custom";
+
+/** provider preset 公开输出(api_key 不回传,只 has_key)。 */
+export interface ProviderPresetOut {
+  id: string;
+  name: string;
+  provider_type: string;
+  base_url: string;
+  model: string;
+  enabled: boolean;
+  created_at: string;
+  is_active: boolean;
+  has_key: boolean;
+}
+
+/** /api/providers/active GET 响应(无活跃时 id 为 null)。 */
+export interface ActiveProviderResponse {
+  id: string | null;
+  name: string;
+  is_active: boolean;
+  has_key: boolean;
 }

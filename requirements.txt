@@ -4,13 +4,7 @@
 #   core  = 本文件（应用启动与主功能的最小依赖集）
 #   ocr   = pip install -r requirements-ocr.txt   (PaddleOCR 文字识别，体积大)
 #   全量  = ocr 已含其余可选依赖
-# 注：pyqtdarktheme 2.x 在部分 Python 版本（3.13+/部分 wheel）无可装发布，
-#     生产代码通过 src/utils/theme_compat.py 桥接 0.1.7 与 2.x API，故放宽下界。
 # ============================================================================
-
-# --- GUI ---
-PyQt6>=6.6.0
-pyqtdarktheme>=0.1.7,<3          # theme_compat 桥接，0.1.7 起即可
 
 # --- Video / CV core ---
 opencv-python-headless>=4.8.0

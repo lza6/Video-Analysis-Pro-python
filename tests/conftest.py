@@ -6,7 +6,9 @@ import pytest
 # 让 tests 能 import src 包
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# torch 必须先于 PyQt6 加载（Windows DLL 顺序），与 main_window 同样处理
+# torch 必须先于其它 C 扩展加载(Windows DLL 顺序坑,与 Qt 无关,本项目已去 PyQt6)。
+# conftest 顶部 import torch 守卫:后续测试若 import cv2/torch 相关模块,
+# DLL 解析顺序已定,避免 vcruntime 旧副本冲突。
 try:
     import torch  # noqa: F401
 except OSError:
@@ -15,14 +17,9 @@ except OSError:
 
 @pytest.fixture(scope="session")
 def qapp():
-    """全局 QApplication fixture（offscreen 平台，session 级单例）。
+    """占位 fixture(已无 PyQt6 依赖)。
 
-    此前 test_e2e_smoke / test_e2e_full_pipeline 依赖的 qapp 由同包其它测试
-    文件（test_ui_components 等）的 module 级 fixture 提供——单跑该文件时
-    'fixture qapp not found'（CI 打包 job 曾因它红）。收进根 conftest 统一。
+    v9.0.0 起桌面壳走 Electron,后端纯 FastAPI,测试无 Qt 事件循环需求。
+    保留此 fixture 名以兼容历史测试签名(返回 None,无人再读它的属性)。
     """
-    import os
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PyQt6.QtWidgets import QApplication
-    app = QApplication.instance() or QApplication([])
-    yield app
+    yield None

@@ -6,7 +6,7 @@ plan 构建 / handle_user_message / run_plan / on_task_step_done /
 parse_tool_call 这些纯函数与状态机逻辑。
 
 设计原则：
-  - 纯函数直接调，无 LLM / 无 PyQt6 / 无真实工具
+  - 纯函数直接调，无 LLM / 无 Qt 依赖 / 无真实工具
   - AgentOrchestrator 用 mock tool_registry（FakeRegistry）注入，避免真实工具
   - skills 用真实 load_skills()（读 config/skills）；环境无 skill 时兼容空 tuple
   - 不发起任何真实付费 API（llm_callback 一律不传或用 lambda mock）

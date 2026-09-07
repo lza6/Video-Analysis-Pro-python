@@ -1,7 +1,6 @@
-"""Video Analysis Pro — Web 后端包(FastAPI)。
+"""TingFeng Hermes — Web 后端包(FastAPI)。
 
-重构自原 PyQt6 GUI(src/ui/),复用 src/core/ 全部分析能力,
-通过 HTTP + SSE 暴露:
+复用 src/core/ 全部分析能力,通过 HTTP + SSE 暴露:
 
   GET  /api/health               → 能力矩阵 + 磁盘余量 + keyring 状态
   POST /api/analyze              → 创建分析作业,返回 job_id

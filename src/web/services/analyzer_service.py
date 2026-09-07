@@ -1,7 +1,7 @@
 """分析服务:把 src/core 的同步三阶段流水线包成后台任务 + SSE 事件发射。
 
-这是 GUI 层 ExtractionWorker/AnalysisWorker 的 Web 等价物。
-QThread 的 pyqtSignal → 这里是 JobRecord.queue.put_nowait。
+GUI 层 ExtractionWorker/AnalysisWorker 的 Web 等价物:
+JobRecord.queue.put_nowait 取代信号槽,事件由 SSE stream 消费。
 """
 from __future__ import annotations
 
@@ -101,10 +101,15 @@ class AnalyzerService:
 
         # 后台线程入口:在子线程里跑,通过 loop.call_soon_threadsafe 推 SSE 事件
         def push(event_type: str, data: dict):
-            """从子线程向主 loop 的 queue 推事件。"""
+            """从子线程向主 loop 推 SSE 事件(分配 seq + 维护环形缓冲)。
+
+            v10.2.0:走 rec.put_event 统一分配 seq + 入 recent_events 缓冲,
+            断线重连时可从缓冲重放。call_soon_threadsafe 把 put_event
+            调度到主 loop 执行(queue.put_nowait 必须在 loop 线程)。
+            """
             try:
                 self._loop.call_soon_threadsafe(
-                    rec.queue.put_nowait, {"type": event_type, "data": data}
+                    rec.put_event, event_type, data
                 )
             except Exception as e:
                 log.debug(f"push failed (job {rec.job_id}): {e}")

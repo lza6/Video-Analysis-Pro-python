@@ -1,4 +1,4 @@
-"""Video Analysis Pro — Headless 分析服务 (Docker / 无 GUI 环境)
+"""TingFeng Hermes — Headless 分析服务 (Docker / 无 GUI 环境)
 
 复用 src/core 的全部分析能力，通过 HTTP 暴露:
   GET  /healthz          → 能力矩阵 + 磁盘余量
@@ -323,7 +323,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Video Analysis Pro headless")
+    parser = argparse.ArgumentParser(description="TingFeng Hermes headless")
     parser.add_argument("--port", type=int, default=int(os.environ.get("VAP_PORT", "8000")))
     args = parser.parse_args()
 

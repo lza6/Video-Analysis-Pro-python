@@ -46,7 +46,7 @@ const INITIAL: AnalyzeState = {
 
 /**
  * 分析作业生命周期 hook:提交 → SSE 消费 → 状态聚合。
- * 取代 PyQt6 的 ExtractionWorker/AnalysisWorker + 信号槽。
+ * 后台 ExtractionWorker/AnalysisWorker 的 Web 等价物,通过 SSE 推送进度。
  */
 export function useAnalyzeJob() {
   const [state, setState] = useState<AnalyzeState>(INITIAL);

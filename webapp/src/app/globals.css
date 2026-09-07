@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* ---------------------------------------------------------------------------
-   VAP Web UI 设计 Token — 与营销站 website/ 同一套玻璃拟态 2.0 语言
+   TingFeng Hermes Web UI 设计 Token — 与营销站 website/ 同一套玻璃拟态 2.0 语言
    深色墨蓝底 + 青/紫极光点缀(oklch)。文本对比度基线:正文 ≥ 7:1。
 --------------------------------------------------------------------------- */
 @theme inline {
@@ -157,4 +157,10 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
 }

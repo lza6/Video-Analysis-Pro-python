@@ -26,7 +26,7 @@ from typing import Optional
 def build_identity() -> str:
     return (
         "# IDENTITY\n"
-        "你是 Video Analysis Pro 的内置视频分析 Agent（听风公司出品）。\n"
+        "你是 TingFeng Hermes 的内置视频分析 Agent（听风公司出品）。\n"
         "使命：帮助用户理解视频内容、定位关键时刻、执行媒体操作。\n"
         "你是精确、诚实、可验证的助手：不知道就说不知道，工具失败就报告失败。\n"
     )
@@ -243,21 +243,26 @@ def match_skills(text: str, skills) -> Optional[str]:
         is_sparse = any(k in lower for k in sparse_keys)
         is_crowded = any(k in lower for k in crowded_keys)
         is_night = any(k in lower for k in night_keys)
-        # 同时命中多类时的优先级：密集 > 夜间 > 稀疏
-        # （商场里也有走廊，密集场景算法更合适；夜间密集仍走密集；
-        #   夜间稀疏走廊走夜间 skill 降阈值更敏感）
-        target_name = None
+        # 同时命中多类时按优先级尝试多个候选目标(密集 > 夜间 > 稀疏)。
+        # 取第一个 enabled 且在 skills 中存在的目标; 若首选目标在当前
+        # skills 集合中不存在(如未安装夜间自适应 skill), 自动回退到次选,
+        # 避免"夜间走廊"因夜间 skill 缺失而落空返回 None。
+        # （商场里也有走廊, 密集场景算法更合适; 夜间密集仍走密集;
+        #   夜间稀疏走廊走夜间 skill 降阈值更敏感, 缺失则回退稀疏走廊）
+        candidate_names: list[str] = []
         if is_crowded:
-            target_name = "surveillance-crowded-scene"
-        elif is_night:
-            target_name = "surveillance-night-adaptive"
-        elif is_sparse:
-            target_name = "surveillance-sparse-corridor"
-        if target_name:
+            candidate_names.append("surveillance-crowded-scene")
+        if is_night:
+            candidate_names.append("surveillance-night-adaptive")
+        if is_sparse:
+            candidate_names.append("surveillance-sparse-corridor")
+        for target_name in candidate_names:
             for sk in skills:
                 if sk.enabled and sk.name == target_name:
                     _append_hit(sk)
                     break
+            if hits:
+                break
 
     if not hits:
         return None

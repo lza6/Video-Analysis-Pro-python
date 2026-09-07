@@ -8,7 +8,7 @@ interface PlaceholderProps {
   desc: string;
   /** 该模块将提供的能力清单 */
   capabilities: string[];
-  /** 对应原 PyQt6 文件,便于追溯 */
+  /** 对应原桌面模块名,便于追溯 */
   origin: string;
 }
 

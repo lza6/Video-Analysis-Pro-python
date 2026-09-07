@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>TingFeng Hermes v9.0.0 变更报告</title>
+<style>
+body{font-family:-apple-system,'Segoe UI',sans-serif;max-width:920px;margin:2em auto;padding:0 1.5em;line-height:1.65;color:#1a1a1a}
+h1{color:#15182a;border-bottom:3px solid #4ee0a0;padding-bottom:.3em}
+h2{color:#15182a;margin-top:2em;border-left:4px solid #6b7cf6;padding-left:.6em}
+code,pre{background:#f4f4f4;padding:.15em .4em;border-radius:4px;font-family:Consolas,monospace}
+pre{padding:1em;overflow-x:auto}
+table{border-collapse:collapse;width:100%;margin:1em 0}
+th,td{border:1px solid #ddd;padding:.5em .7em;text-align:left}
+th{background:#15182a;color:#fff}
+tr:nth-child(even){background:#f9f9f9}
+.quiz{background:#15182a;color:#fff;padding:1.5em;border-radius:8px;margin-top:2em}
+.quiz h3{margin-top:0;color:#4ee0a0}
+.quiz label{display:block;margin:.6em 0;padding:.5em;background:rgba(255,255,255,.08);border-radius:4px;cursor:pointer}
+.quiz input{margin-right:.5em}
+.q{margin-bottom:1.2em}
+.note{background:#fff3cd;border-left:4px solid #ffc107;padding:1em;margin:1em 0}
+.risk{background:#f8d7da;border-left:4px solid #dc3545;padding:1em;margin:1em 0}
+.ok{background:#d4edda;border-left:4px solid #28a745;padding:1em;margin:1em 0}
+</style></head><body>
+<h1>TingFeng Hermes v9.0.0 变更报告</h1>
+<p><strong>生成时间:</strong> 2026-09-06 · <strong>版本:</strong> v8.0.0 → v9.0.0 · <strong>作者:</strong> 主控代理(Orchestrator)</p>
+
+<h2>1. 上下文与直觉</h2>
+<p>用户的核心诉求:<strong>把 Video Analysis Pro 从"Web UI 视频分析工具"升级为"通用全能 AI Agent 桌面平台"</strong>,品牌改名 <strong>TingFeng Hermes</strong>(听风·赫尔墨斯)。参考 DeepSeek Harness(DSH)、Minke、codex-main、openclaw 等项目的架构概念(非抄代码,因为它们是 TS/Rust,VAP 是 Python)。</p>
+<p>隐性需求:双击即用(小白友好)、内置智能体+插件、IM 网关、远程访问、生产可上线、真实 E2E 验收。本次执行按 Orchestrator 模式:6 scout 调查→4 Builder 并行实现(A/B/C/D)→3 Builder 收口(E/F/G)→主控亲自收口挂载+版本+logo+品牌+打包配置。</p>
+
+<h2>2. 做了什么(按模块)</h2>
+<table>
+<tr><th>模块</th><th>位置</th><th>关键变更</th><th>验证</th></tr>
+<tr><td><strong>Electron 桌面壳</strong></td><td>desktop/</td><td>main.js(单实例+托盘+loadURL)+runtime-controller.js(spawn python -m src.web.serve + stdout 探端口 + health 兜底 + taskkill /T)+preload.js+electron-builder.yml</td><td>node --check 三全 OK · 真实 spawn 起 serve.py 端口探测 8001 成功 · electron 窗口能 loadURL</td></tr>
+<tr><td><strong>Agent 框架</strong></td><td>src/core/{agent,tools,subagent,credentials,plugins}/</td><td>ReactLoopAgent + SessionEvent append-only log + 工具四 waterfall + subagent 四级路由(call&gt;role&gt;default&gt;inherit)+ 插件框架(contextvars 替 Cordis fiber)+ adapter 桥接 16 老工具</td><td>test_agent_framework 26 passed</td></tr>
+<tr><td><strong>IM 网关</strong></td><td>src/core/im_gateway/</td><td>IMMailbox(SQLite lease/ack)+ GatewayCipher(AES 条件依赖)+ 三 adapter(Mock:微信/TG/Discord)+ IMGateway</td><td>test_im_gateway 30 passed · Web router 真实调用 inject→process→messages 闭环 200</td></tr>
+<tr><td><strong>远程访问</strong></td><td>src/remote/</td><td>Tunnel 抽象 + 三方案(Mock: Tailscale Serve/Direct/Cloudflare Access)+ RemoteManager</td><td>test_remote_tunnel 44 passed · Web router start→status(state=active)→stop 闭环 200</td></tr>
+<tr><td><strong>Web 后端</strong></td><td>src/web/</td><td>app.py 挂 14 router(+im_gateway+remote)+ title/version 改 TingFeng Hermes 9.0.0;新 routers/im_gateway.py + remote.py</td><td>TestClient 全 200 · test_web_api 9 passed</td></tr>
+<tr><td><strong>PyQt6 全清</strong></td><td>batch_runner.py/conftest/requirements/build spec/ci/Dockerfile</td><td>BatchRunner 去 QObject→纯 _Signal · 7 pyqtSignal→_Signal · conftest 去 QApplication · requirements 删 PyQt6/pyqtdarktheme · build spec 删 backend_qtagg→backend_agg · ci 删 PyQt6 装</td><td>PyQt6 真依赖终扫空 · pyflakes src/ EXIT 0 · test_batch_runner 14 passed</td></tr>
+<tr><td><strong>品牌全换</strong></td><td>constants/serve.py/launcher/bat/main.js/electron-builder/agent_prompt/plugins/webapp layout+AppShell</td><td>APP_NAME=TingFeng Hermes · APP_VERSION=9.0.0 · 前端 logo.png + 顶栏文字 TingFeng Hermes · 所有 "Video Analysis Pro" 字符串替换</td><td>rg 全扫 src/desktop/webapp/bat 无残留(仅 CHANGELOG 历史)</td></tr>
+<tr><td><strong>用户真实 logo</strong></td><td>desktop/assets/ + webapp/public/ + resources/</td><td>从 听风公司logo.png(2816×1536)生成 icon-256/512/1024.png + icon.png + logo.png + app_icon.ico(多尺寸)+ app_icon.png</td><td>PIL 中心方形裁切 → 多尺寸 + ICO</td></tr>
+<tr><td><strong>版本号四同步</strong></td><td>constants.py + webapp/package.json + desktop/package.json + app.py</td><td>全部 9.0.0 + TingFeng Hermes</td><td>grep 确认</td></tr>
+<tr><td><strong>文档全量重写</strong></td><td>CLAUDE.md + README.md + CHANGELOG.md + memory/8 文件</td><td>CLAUDE v9 架构表 + README TingFeng Hermes + CHANGELOG v9.0.0 置顶 + 新建 vap-v9-tingfeng-hermes.md + 修正死链 + 7 旧记忆加 v9 状态</td><td>Builder-F 交付</td></tr>
+</table>
+
+<h2>3. 关键修复(收口阶段发现的真问题)</h2>
+<div class="risk">
+<strong>P0 修复(阻塞):</strong>
+<ul>
+<li><strong>桌面版闪退根因:</strong>runtime-controller.js 原用 <code>python src/web/serve.py</code>(脚本直跑),serve.py 内部 <code>from .config import get_settings</code> 相对导入 → <strong>ImportError: attempted relative import with no known parent package</strong>。改用 <code>python -m src.web.serve --no-browser</code>(包模块入口,与 launcher.py 一致)。<strong>实测端口探测 8001 成功</strong>。</li>
+<li><strong>electron 二进制下载失败:</strong>npm install 时 electron postinstall 从 github.com 下载 ECONNRESET。配 <code>ELECTRON_MIRROR=https://registry.npmmirror.com/-/binary/electron/</code> 走国内镜像,装上 electron.exe(188MB)。</li>
+<li><strong>端口被占闪退:</strong>serve.py 已自动跳端口(8000→8001),electron 的 stdout 探测需 5s 兜底走 health 轮询(已实现),实测 8000 被占→跳 8001→窗口 loadURL 成功。</li>
+<li><strong>logo 旧构建残留:</strong>webapp/out/logo.svg 是旧构建(已删 out,下次启动 serve.py 自动 rebuild)。</li>
+<li><strong>Remote router async bug:</strong>RemoteManager.prepare/start/stop/status 全是 async coroutine,原写 <code>asyncio.to_thread(mgr.start,...)</code> 当同步函数调 → coroutine never awaited + PydanticSerializationError。改直接 await + TunnelStatus 是 frozen dataclass 非 pydantic,手动转 dict。</li>
+<li><strong>IM router IMMessage 构造:</strong>原手建 IMMessage 缺 msg_id 必填。改用 mailbox.put_inbound(关键字参,内部自动生成 msg_id)。</li>
+</ul>
+</div>
+
+<h2>4. 验证证据</h2>
+<table>
+<tr><th>验证项</th><th>命令</th><th>结果</th></tr>
+<tr><td>pyflakes src/</td><td><code>venv/Scripts/python.exe -m pyflakes src/ launcher.py</code></td><td>EXIT 0(仅 global 误报)</td></tr>
+<tr><td>PyQt6 真依赖</td><td><code>rg "^from PyQt6|class.*QObject|pyqtSignal" src/</code></td><td>空</td></tr>
+<tr><td>desktop js 语法</td><td><code>node --check main.js/preload.js/runtime-controller.js</code></td><td>三全 OK</td></tr>
+<tr><td>关键测试回归</td><td><code>pytest test_web_api test_agent_framework test_im_gateway test_remote_tunnel test_batch_runner</code></td><td>123 passed</td></tr>
+<tr><td>全量回归</td><td><code>pytest tests/ --ignore headless/e2e_smoke</code></td><td>529 passed, 1 failed(test_skills_match 既有缺陷,非本次引入)</td></tr>
+<tr><td>桌面版 spawn</td><td><code>node -e require('./runtime-controller.js')</code></td><td>READY port=8001 · 子进程起 · kill 清理 OK</td></tr>
+<tr><td>electron 窗口</td><td><code>electron ./desktop</code></td><td>窗口起 · loadURL 8001 · 后端 200(headless 环境 GPU 报错非阻塞)</td></tr>
+<tr><td>IM/remote router</td><td>TestClient 真实调用</td><td>全 200 闭环</td></tr>
+<tr><td>logo 生成</td><td>PIL 渲染</td><td>icon-256/512/1024.png + .ico 多尺寸</td></tr>
+</table>
+
+<h2>5. 剩余风险与边界(诚实)</h2>
+<div class="note">
+<ul>
+<li><strong>IM 网关真实凭据:</strong>三 adapter 全 Mock,真实微信/TG/Discord token 未配置(付费 API 预算 0)。Mock 闭环全验证,真实化需用户授权凭据后替换 adapter。</li>
+<li><strong>远程访问真实 tunnel:</strong>Tailscale/Cloudflared 未真实连(Mock 返回 mock-node.tailnet.ts.net)。契约对齐 Minke,真实化需装 tailscale/cloudflared CLI + 凭据。</li>
+<li><strong>Agent 框架 LLM 真实接入:</strong>ReactLoopAgent 用 MockLLMClient 测试通过,生产 ProviderRouterClient(包 ProviderRouter 成 LLMClient stream)<strong>未写</strong>(避免改 provider_router.py 边界)。接真 NVIDIA 需主控在 loop.py 旁加 adapter.py。</li>
+<li><strong>test_skills_match 1 failed:</strong>既有缺陷(skill 路由匹配),<strong>非本次改动引入</strong>,标 P2 不阻塞 v9。</li>
+<li><strong>GPU 进程报错:</strong>electron 在无显示/模拟环境跑时 GPU process exit_code=143(正常,headless 环境无 GPU)。真实双击有 GPU 不报。</li>
+<li><strong>electron-builder 真实打包:</strong>配置齐全(electron-builder.yml),但未真实跑 <code>npm run build:win</code>(需下载 nsis + 7z,耗时数分钟,且 venv 体积大数 GB,建议用 PyInstaller 打 serve.py 单 exe 再 electron 包)。</li>
+<li><strong>GitHub Release:</strong>未推送(gh CLI 不可用 + 无凭据)。需用户授权 git push origin main --tags 后创建 Release。</li>
+</ul>
+</div>
+
+<h2>6. 变更测验</h2>
+<p>请完成以下测验,确认你理解本次变更。每题单选,答案见文末。</p>
+<div class="quiz">
+<form>
+<div class="q"><p><strong>Q1.</strong> 桌面版双击闪退的根本原因是什么?</p>
+<label><input type="radio" name="q1" value="a"> a) Electron 没装</label>
+<label><input type="radio" name="q1" value="b"> b) runtime-controller.js 用 <code>python src/web/serve.py</code>(脚本直跑)导致相对导入 ImportError,已改用 <code>python -m src.web.serve</code></label>
+<label><input type="radio" name="q1" value="c"> c) 端口 8000 被占</label>
+<label><input type="radio" name="q1" value="d"> d) Python 版本太新</label>
+</div>
+<div class="q"><p><strong>Q2.</strong> 哪些文件版本号同步到 9.0.0?</p>
+<label><input type="radio" name="q2" value="a"> a) 只有 constants.py</label>
+<label><input type="radio" name="q2" value="b"> b) constants.py + webapp/package.json + desktop/package.json + app.py</label>
+<label><input type="radio" name="q2" value="c"> c) 只有 CHANGELOG.md</label>
+<label><input type="radio" name="q2" value="d"> d) 不需要同步</label>
+</div>
+<div class="q"><p><strong>Q3.</strong> PyQt6 在 v9.0.0 的状态?</p>
+<label><input type="radio" name="q3" value="a"> a) 仍是核心 UI 框架</label>
+<label><input type="radio" name="q3" value="b"> b) 真依赖全清(BatchRunner 去 QObject→纯 _Signal,requirements/build spec/ci/conftest 全删),桌面壳走 Electron 无 Qt</label>
+<label><input type="radio" name="q3" value="c"> c) 只删了一半</label>
+<label><input type="radio" name="q3" value="d"> d) 换成了 PyQt5</label>
+</div>
+<div class="q"><p><strong>Q4.</strong> Agent 框架的 SessionEvent append-only log 解决什么问题?</p>
+<label><input type="radio" name="q4" value="a"> a) 加快 LLM 推理</label>
+<label><input type="radio" name="q4" value="b"> b) 崩溃可恢复(从事件日志派生消息历史,替代直接维护消息列表)</label>
+<label><input type="radio" name="q4" value="c"> c) 减少内存</label>
+<label><input type="radio" name="q4" value="d"> d) 美化日志</label>
+</div>
+<div class="q"><p><strong>Q5.</strong> subagent 四级路由回退顺序是?</p>
+<label><input type="radio" name="q5" value="a"> a) default &gt; role &gt; call &gt; inherit</label>
+<label><input type="radio" name="q5" value="b"> b) call(显式参数) &gt; role(角色模板) &gt; default(插件默认) &gt; inherit(继承父 agent)</label>
+<label><input type="radio" name="q5" value="c"> c) inherit &gt; default &gt; role &gt; call</label>
+<label><input type="radio" name="q5" value="d"> d) 随机</label>
+</div>
+<div class="q"><p><strong>Q6.</strong> IM 网关和远程访问为什么是 Mock?</p>
+<label><input type="radio" name="q6" value="a"> a) 抄不动 DSH 代码</label>
+<label><input type="radio" name="q6" value="b"> b) 付费 API/外部凭据预算 0,Mock 闭环验证契约,真实化需用户授权凭据后替换 adapter</label>
+<label><input type="radio" name="q6" value="c"> c) 没时间做</label>
+<label><input type="radio" name="q6" value="d"> d) Mock 就够了不用真实化</label>
+</div>
+<div class="q"><p><strong>Q7.</strong> 用户真实 logo(听风公司logo.png)如何接入?</p>
+<label><input type="radio" name="q7" value="a"> a) 只放一个位置</label>
+<label><input type="radio" name="q7" value="b"> b) 从 2816×1536 PNG 中心方形裁切,生成 icon-256/512/1024.png + icon.png + logo.png + app_icon.ico(多尺寸),放 desktop/assets/ + webapp/public/ + resources/</label>
+<label><input type="radio" name="q7" value="c"> c) 没接入,还是 SVG 占位</label>
+<label><input type="radio" name="q7" value="d"> d) 用 Builder-G 的 SVG</label>
+</div>
+<div class="q"><p><strong>Q8.</strong> 全量回归 529 passed 1 failed,失败的是哪个,是否本次引入?</p>
+<label><input type="radio" name="q8" value="a"> a) test_web_api,本次引入</label>
+<label><input type="radio" name="q8" value="b"> b) test_skills_match::test_sparse_corridor_by_corridor,<strong>既有缺陷</strong>(skill 路由匹配),非本次引入,标 P2</label>
+<label><input type="radio" name="q8" value="c"> c) test_batch_runner,本次引入</label>
+<label><input type="radio" name="q8" value="d"> d) 没有失败</label>
+</div>
+<div class="q"><p><strong>Q9.</strong> 远程访问 router 的 RemoteManager.prepare/start 为什么不能直接调?</p>
+<label><input type="radio" name="q9" value="a"> a) 它们是同步函数</label>
+<label><input type="radio" name="q9" value="b"> b) 它们是 async coroutine,必须 await;TunnelStatus 是 frozen dataclass 非 pydantic,不能 model_dump,需手动转 dict</label>
+<label><input type="radio" name="q9" value="c"> c) 需要密码</label>
+<label><input type="radio" name="q9" value="d"> d) 没装 tailscale</label>
+</div>
+<div class="q"><p><strong>Q10.</strong> 哪些是<strong>真实闭环</strong>的(非 Mock)?</p>
+<label><input type="radio" name="q10" value="a"> a) IM 网关真实连微信</label>
+<label><input type="radio" name="q10" value="b"> b) 远程访问真实连 Tailscale</label>
+<label><input type="radio" name="q10" value="c"> c) Electron 壳 spawn python serve.py + 端口探测 + loadURL 真实跑通 + Web API 14 router 真实 200 + Agent 框架 MockLLM 测试 + 视频分析三阶段流水线(既有)</label>
+<label><input type="radio" name="q10" value="d"> d) 全是 Mock</label>
+</div>
+</form>
+</div>
+
+<div class="ok">
+<strong>答案:</strong> Q1=b · Q2=b · Q3=b · Q4=b · Q5=b · Q6=b · Q7=b · Q8=b · Q9=b · Q10=c<br>
+<strong>解读:</strong> 全选 b/c 说明你理解了本次变更的核心:根因修复(P0)、品牌同步、PyQt6 清除、DSH 概念移植、Mock 边界、真实闭环范围。Q10 选 c 尤其重要——区分"真实闭环"与"Mock 待真实化"。
+</div>
+
+<h2>7. 后续建议</h2>
+<ul>
+<li><strong>v10 路线图:</strong>参考 openclaw(与 VAP 转型 1:1 重合,153 extensions + 51 skills + 17 LLM provider),抄其插件沙箱(scanner.ts)+ Hook 隔离(SharedArrayBuffer)+ 设备配对。</li>
+<li><strong>Agent LLM 真实接入:</strong>在 src/core/agent/loop.py 旁加 provider_router_client.py,把 ProviderRouter 包成 LLMClient stream,接真 NVIDIA 11 key。</li>
+<li><strong>IM 真实化:</strong>wechat 用 itchat/企业微信 SDK,telegram 用 Bot API,discord 用 discord.py。需用户授权凭据。</li>
+<li><strong>打包优化:</strong>PyInstaller 打 serve.py 单 exe(去 venv 数 GB 体积),electron 只包前端+python exe。</li>
+<li><strong>skills_match 修复:</strong>P2 既有缺陷,skill 路由匹配逻辑需调阈值。</li>
+<li><strong>git push + Release:</strong>用户授权后 <code>git push origin main --tags</code> + gh release create v9.0.0。</li>
+</ul>
+
+</body></html>

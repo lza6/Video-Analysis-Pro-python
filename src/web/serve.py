@@ -128,15 +128,49 @@ def _try_build_frontend() -> None:
 def run_server(host: str | None = None, port: int | None = None,
                open_browser: bool = True, reload: bool = False) -> int:
     """启动 Web 服务。返回进程退出码。"""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s",
-    )
+    # Windows 控制台默认 GBK,中文日志写 stdout/stderr 会乱码(用户启动日志
+    # 实证 "绗戝彛 8000 琚崰" 等)。强制 reconfigure 为 UTF-8,与 runtime-controller
+    # 的 chunk.toString("utf-8") 解码一致。reconfigure 失败(如已关闭)则跳过。
+    import sys as _sys
+    for _stream in (_sys.stdout, _sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            pass
+
+    # 统一结构化 JSON 日志(与 app.py lifespan 同源,幂等)。替代 basicConfig:
+    # basicConfig 走默认 stderr + 纯文本,与 lifespan 装的 JSONFormatter 并存会
+    # 双输出且中文乱码。install_json_logging 走 stdout + JSON + trace_id,
+    # 幂等返回同一 handler,uvicorn 启动后 lifespan 再调不重复添加。
+    try:
+        from src.core.runtime.structured_log import install_json_logging
+        install_json_logging(level=logging.INFO)
+    except Exception as e:  # noqa: BLE001 — 防御性,不阻断启动
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s",
+        )
+        log.warning("结构化日志初始化失败,回退纯文本: %s", e)
 
     from .config import get_settings
     settings = get_settings()
     host = host or os.environ.get("VAP_HOST") or settings.host
     port = port or int(os.environ.get("VAP_PORT") or 0) or settings.port
+
+    # 远程安全守卫:对外监听(非 loopback)强制要求 Bearer Token。
+    # 用户启动日志实证过 "Web auth: DISABLED" + "0.0.0.0" 并存的安全洞:
+    # 后端监听所有网卡但 /api/** 鉴权关闭,任何人可调分析/批量/Agent。
+    # 纯本地(127.0.0.1 / ::1 / localhost)豁免,保留无 token 的桌面体验。
+    # 显式带 token 启动则放行。env VAP_HOST 强意图 → 必须配 token。
+    _h = (host or "").strip().lower()
+    is_loopback = _h in ("127.0.0.1", "localhost", "::1", "")
+    if not is_loopback and not settings.headless_token:
+        log.error(
+            f"拒绝启动:监听 {host}(非 loopback)但 VAP_HEADLESS_TOKEN 未配置。"
+            f"对外暴露后端必须配置鉴权 token(>=32 字符随机串),"
+            f"否则 /api/** 任何人可调。改用 127.0.0.1 仅本地,或配 token 后重启。"
+        )
+        return 1
 
     # 端口被占时自动找下一个可用端口(本地工具优先能跑起来,而非退出)。
     # 只有命令行显式 --port 才算"用户强意图",环境变量 VAP_PORT 是默认配置
@@ -168,24 +202,35 @@ def run_server(host: str | None = None, port: int | None = None,
         ).start()
 
     probe_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
-    log.info(f"Video Analysis Pro Web UI: http://{probe_host}:{port}")
+    log.info(f"TingFeng Hermes Web UI: http://{probe_host}:{port}")
 
     import uvicorn
 
     # uvicorn 默认日志走 stderr,PowerShell 会把它当 error stream 标红字
     # (NativeCommandError 视觉污染,功能不受影响)。改走 stdout 后 .bat
     # 控制台显示干净。access log 一并收进 stdout。
-    import logging as _lg
-    import sys as _sys
+    # 日志 formatter 复用已安装的 JSONFormatter(若 structured_log 已装配),
+    # 让 uvicorn 输出也带 trace_id 字段,与 app.py lifespan 同源。
+    # dictConfig 的 "()" 接受 callable(类即其构造器),比 lambda 更稳。
+    _uvicorn_formatter_cls = None
+    try:
+        from src.core.runtime.structured_log import JSONFormatter as _JF
+        _uvicorn_formatter_cls = _JF
+    except Exception:  # noqa: BLE001
+        pass
+    if _uvicorn_formatter_cls is not None:
+        _default_fmt: dict = {"()": _uvicorn_formatter_cls}
+    else:
+        _default_fmt = {
+            "()": "uvicorn.logging.DefaultFormatter",
+            "fmt": "%(levelprefix)s %(message)s",
+            "use_colors": None,
+        }
     _log_config = {
         "version": 1,
         "disable_existing_loggers": False,
         "formatters": {
-            "default": {
-                "()": "uvicorn.logging.DefaultFormatter",
-                "fmt": "%(levelprefix)s %(message)s",
-                "use_colors": None,
-            },
+            "default": _default_fmt,
             "access": {
                 "()": "uvicorn.logging.AccessFormatter",
                 "fmt": '%(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s',
@@ -225,7 +270,7 @@ def run_server(host: str | None = None, port: int | None = None,
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Video Analysis Pro Web UI 服务")
+    parser = argparse.ArgumentParser(description="TingFeng Hermes Web UI 服务")
     parser.add_argument("--host", default=None, help="监听地址(默认取 VAP_HOST/配置)")
     parser.add_argument("--port", type=int, default=None, help="端口(默认取 VAP_PORT/配置)")
     parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")

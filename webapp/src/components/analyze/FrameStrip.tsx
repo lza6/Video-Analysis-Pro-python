@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/Card";
 import type { FrameInfo } from "@/lib/types";
 import { apiUrl } from "@/lib/api";
 
-/** 实时帧条:分析中逐帧追加,横向滚动。取代 PyQt6 CarouselWidget 的实时部分。 */
+/** 实时帧条:分析中逐帧追加,横向滚动。CarouselWidget 实时部分的 Web 等价物。 */
 export function FrameStrip({ frames }: { frames: FrameInfo[] }) {
   const ref = useRef<HTMLDivElement>(null);
 

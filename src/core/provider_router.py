@@ -319,9 +319,19 @@ class ProviderRouter:
         attempted: set = set()
         attempts = 0
         last_error: str = ""
+        # F7: 端到端计时，覆盖所有重试与切 key
+        t0 = time.perf_counter()
+        # F7: 记录最后一次响应（用于落库时抽 usage + response_preview）
+        last_resp_json: Optional[Dict[str, Any]] = None
+        last_resp_code: Optional[int] = None
+        last_key_id: str = ""
         while True:
             attempts += 1
             if max_attempts is not None and attempts > max_attempts:
+                # F7: 超上限失败也落一条日志
+                self._log_request(
+                    t0, payload, last_resp_code, last_resp_json,
+                    last_key_id, error=last_error or "max_attempts")
                 raise RuntimeError(
                     f"[router] 达 max_attempts={max_attempts} 仍失败：{last_error}")
             key = self.select_key(provider="nvidia", exclude=attempted)
@@ -362,21 +372,33 @@ class ProviderRouter:
                             f"[router] nvidia key {key.name} 网络错误 "
                             f"{last_error}，切下一个 key")
                         self.record_result(key.id, None, last_error)
+                        last_resp_code = None
+                        last_key_id = key.id
                         break  # 跳出同 key 循环，外层切下一个 key
 
                     code = resp.status_code
                     if 200 <= code < 300:
                         self.record_result(key.id, code, "")
                         try:
-                            return resp.json()
+                            data = resp.json()
                         finally:
                             resp.close()
+                        # F7: 记录最后一次成功响应
+                        last_resp_json = data
+                        last_resp_code = code
+                        last_key_id = key.id
+                        self._log_request(
+                            t0, payload, code, data, key.id, error="")
+                        return data
                     elif code in FATAL_STATUS_CODES:
                         # 401/403/404/422：放弃，标记 key 失效
                         body = self._safe_body(resp)
                         err = f"HTTP {code} {body}"
                         resp.close()
                         self.record_result(key.id, code, err)
+                        self._log_request(
+                            t0, payload, code, None, key.id,
+                            error=err, response_preview=body)
                         raise RuntimeError(
                             f"[router] nvidia key {key.name} 放弃"
                             f"（HTTP {code}）：{body}")
@@ -413,6 +435,9 @@ class ProviderRouter:
                         body = self._safe_body(resp)
                         resp.close()
                         self.record_result(key.id, code, f"HTTP {code} {body}")
+                        self._log_request(
+                            t0, payload, code, None, key.id,
+                            error=f"HTTP {code} {body}", response_preview=body)
                         raise RuntimeError(
                             f"[router] nvidia key {key.name} HTTP {code}：{body}")
                 # 同 key 循环正常 break 出来（需切 key）：加 attempted，0.5s 后重选
@@ -421,6 +446,60 @@ class ProviderRouter:
                 continue
             finally:
                 self._limiter.release_concurrent(key.id)
+
+    # ------------------------------------------------------------------
+    # F7: 请求日志接入（最小侵入，失败不抛回路由层）
+    # ------------------------------------------------------------------
+    def _log_request(
+        self,
+        t0: float,
+        payload: Dict[str, Any],
+        status_code: Optional[int],
+        resp_json: Optional[Dict[str, Any]],
+        key_id: str,
+        *,
+        error: str = "",
+        response_preview: str = "",
+    ) -> None:
+        """落一条 RequestLog。失败只警告不抛，避免影响主流程。
+
+        - t0: time.perf_counter 起点（post_nvidia 入口记的）
+        - payload: 请求体（截断后存为 request_preview）
+        - resp_json: 成功时的响应 JSON，从中抽 usage；失败时 None
+        - response_preview: 失败时传错误体；成功时用 resp_json 序列化
+        """
+        try:
+            from .request_log import RequestLog, get_store, parse_usage
+            pt, ct, tt = parse_usage(resp_json) if resp_json else (0, 0, 0)
+            if not response_preview:
+                if resp_json is not None:
+                    try:
+                        response_preview = json.dumps(
+                            resp_json, ensure_ascii=False)[:500]
+                    except Exception:
+                        response_preview = ""
+                # 失败无 body 时 response_preview 留空
+            try:
+                req_preview = json.dumps(payload, ensure_ascii=False)[:500]
+            except Exception:
+                req_preview = str(payload)[:500]
+            entry = RequestLog(
+                provider="nvidia",
+                model=str(payload.get("model", "")) if isinstance(
+                    payload, dict) else "",
+                key_id=key_id,
+                status_code=status_code,
+                latency_ms=(time.perf_counter() - t0) * 1000.0,
+                prompt_tokens=pt,
+                completion_tokens=ct,
+                total_tokens=tt,
+                error=error,
+                request_preview=req_preview,
+                response_preview=response_preview,
+            )
+            get_store().log_request(entry)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[router] 记录请求日志失败（不影响主流程）: {e}")
 
     @staticmethod
     def _safe_body(resp, limit: int = 500) -> str:

@@ -58,3 +58,25 @@ _host_probe.py
 _host_url.txt
 _e2e_*.py
 config/runs.db
+config/runs.db-shm
+config/runs.db-wal
+config/provider_presets.db
+config/provider_presets.db-shm
+config/provider_presets.db-wal
+config/request_logs.db
+config/request_logs.db-shm
+config/request_logs.db-wal
+config/im_gateway.db
+config/im_gateway.db-shm
+config/im_gateway.db-wal
+config/agent_sessions.db
+config/agent_sessions.db-shm
+config/agent_sessions.db-wal
+config/cred_audit.db
+config/cred_audit.db-shm
+config/cred_audit.db-wal
+
+# Playwright E2E 产物(webapp/)
+webapp/playwright-report/
+webapp/test-results/
+webapp/.playwright/
