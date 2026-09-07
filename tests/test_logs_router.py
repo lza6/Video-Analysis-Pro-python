@@ -32,6 +32,8 @@ import src.web.routers.logs as logs_mod  # noqa: E402
 def app(monkeypatch, tmp_path):
     """TestClient(app);进 TestClient 后清空缓冲(lifespan 启动日志先入缓冲)。"""
     from src.web.app import app as real_app
+    from src.web import security as _sec
+    _sec.init_ip_limiter(0)  # 测试禁用 IP 限流(防跨文件 POST 叠加 429)
 
     with TestClient(real_app) as c:
         # 先清空 GCGuard/httpx 等启动日志,保证每用例从空缓冲开始

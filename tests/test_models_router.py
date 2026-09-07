@@ -132,7 +132,9 @@ def test_download_unknown_id_400(module_app):
     """未知 model_id 拒绝(400)。"""
     r = module_app.post("/api/models/nope/download")
     assert r.status_code == 400, r.text
-    assert "unknown model_id" in r.json()["error"]
+    # router raise HTTPException(detail={"error": ...}) → FastAPI 包在 detail 键下
+    detail = r.json().get("detail", {})
+    assert "unknown model_id" in (detail.get("error", "") if isinstance(detail, dict) else str(detail))
 
 
 def test_download_creates_job_and_streams(module_app, models_mgr):
