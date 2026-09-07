@@ -98,7 +98,7 @@ def start_download(model_id: str, request: Request) -> dict:  # type: ignore[no-
 
 
 @router.get("/{model_id}/download/stream", dependencies=[Depends(require_auth)])
-async def download_stream(model_id: str, request):
+async def download_stream(model_id: str, request: Request):
     """SSE 下载进度。"""
     from ..deps import get_job_store
     store = get_job_store()
