@@ -1,5 +1,21 @@
 # Changelog — TingFeng Hermes
 
+## [10.2.0] — 2026-09-07 · Agent 主线闭环 + OpenAI 兼容工具 schema + 断线续传基座
+
+### 核心：ReactLoopAgent 接 agent router 全链路 + 修复 NVIDIA 真实 400 + CI 覆盖率冲刺
+
+- **ProviderRouterClient 补全**（`src/core/provider_router_client.py` 新建）：把 `ProviderRouter.post_nvidia` 包装成 `loop.LLMClient` 协议的 async `stream(messages, tools)`（`asyncio.to_thread` 防阻塞事件循环），tools 经 `build_nvidia_payload(tools=...)` 透传
+- **react 路径 tools 透传**（`agent.py`）：`SyncLLMClientAdapter.stream` → `_make_llm_callback` → `_nvidia_chat` 三层把工具 schema 传进真实 payload，17 工具在 react 路径可被 LLM 调用
+- **OpenAI 兼容工具 schema**（`tools/definition.py` `to_llm_schema`）：VAP 私有 `{name, input_schema}` 平面格式被 NVIDIA 真实端点 400 拒绝（`missing field type`，真实 API 复现），改为 `{type:"function", function:{name,description,parameters}}` 后真实调用 200；连带修 `loop.py` auto_tool_filter 读 `function.name`、`agent.py` tool_descs 读嵌套字段
+- **测试补全**：`test_provider_router_client.py`(7)/`test_agent_router.py`(5)/`test_serve.py`(11)/SessionStore 未跟踪收编(6)；真实 NVIDIA PONG 限流 503 改 skip（上游限流与 payload 无关，防 CI 随机红）
+- **版本号五同步**：constants.py / CHANGELOG / webapp+desktop package.json / app.py → 10.2.0
+
+### 验证（真实运行）
+- `npm run e2e` — 23 passed（真实浏览器，6 spec）
+- react 路径 `POST /api/agent/chat` 真实 NVIDIA 200（思考链 + 中文回复）；工具意图触发 `<function=get_video_meta>`；`GET /api/agent/sessions` 持久化闭环
+- 全量 `pytest tests/` 标准子集 — 804 passed + 2 skipped（PONG 限流 skip）
+- `ruff check` / `pyflakes src/` — 零告警
+
 ## [10.1.0] — 2026-09-06 · v10 闭环补齐(自进化/可观测/安全/质量门禁)
 
 ### 核心：v9→v10 转型的真实落地闭环 + 6 个新能力模块 + CI 质量门禁加固
