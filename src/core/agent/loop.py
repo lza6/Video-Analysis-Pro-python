@@ -180,8 +180,10 @@ class ReactLoopAgent:
                 # 可选：默认注入 system（若 session 无 system event）
                 tools = self.tools.schemas()
                 if self.config.auto_tool_filter is not None:
+                    # v10.2:to_llm_schema 改为 OpenAI 兼容嵌套结构,工具名在
+                    # function.name(registry.schemas 投影后同构)。
                     tools = [t for t in tools
-                             if t["name"] in self.config.auto_tool_filter]
+                             if t["function"]["name"] in self.config.auto_tool_filter]
 
                 # request (LLM stream)
                 await turn.emit(TurnPhase.REQUEST, {

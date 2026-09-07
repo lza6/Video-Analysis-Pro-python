@@ -553,7 +553,8 @@ def _build_react_agent(
 
     # 工具描述(供 system_prompt 用)
     tool_descs = "\n".join(
-        f"- {s['name']}: {s['description']}" for s in registry.schemas()
+        f"- {s['function']['name']}: {s['function']['description']}"
+        for s in registry.schemas()
     )
 
     # active skills 可选加载(失败不阻断)
