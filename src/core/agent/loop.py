@@ -7,8 +7,9 @@
   - 每步从 SessionEvent log 派生消息（不维护独立消息列表）
 
 **LLM 调用**：默认走 `LLMClient` Protocol（async stream deltas）。
-真实生产用 `ProviderRouterClient` 包装 `src/core/provider_router.py`（NVIDIA 多 key），
-回退用 `src/core/logic.py:build_llm_client`。两者都只读 import，不改。
+真实生产用 `src/core/provider_router_client.py:ProviderRouterClient`（包装
+`src/core/provider_router.py` NVIDIA 多 key），回退用 `src/core/logic.py:build_llm_client`。
+两者都只读 import，不改。
 
 工具调用解析：LLM 输出的 tool_calls 走 ToolRegistry.execute（四层 waterfall）。
 """
