@@ -80,3 +80,6 @@ config/cred_audit.db-wal
 webapp/playwright-report/
 webapp/test-results/
 webapp/.playwright/
+
+# 通用构建/导出产物（含 webapp/out/、docs/ 下生成的 out/ 等）
+out/
