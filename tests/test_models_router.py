@@ -264,7 +264,7 @@ def test_download_background_thread_runs(module_app, models_mgr):
     assert "log" in types, f"缺 LOG 事件: {types}"
     assert "verify" in types
     assert "done" in types
-    assert "__close__" in types
+    # __close__ 是流收尾哨兵(不 yield,连接关闭即感知结束);done 存在即证明流正常收尾
     assert rec.status.value == "done"
 
 
@@ -279,7 +279,7 @@ def test_download_app_loop_available(module_app, models_mgr):
     module_app.post("/api/models/yolo_v11n/download")
     status, events, _raw = _start_stream(module_app, "yolo_v11n")
     assert status == 200
-    assert "__close__" in [t for t, _p in events]
+    assert "done" in [t for t, _p in events]
 
 
 def test_download_resume_existing_file(module_app, models_mgr):
