@@ -125,9 +125,15 @@ class SyncLLMClientAdapter:
             if m.get("role") in ("system", "user")
         )
 
+        # v10.2:tools 透传。有工具 schema 时传给 sync_cb(供 _nvidia_chat 塞
+        # payload),无 tools 时零回归(行为与 v10.1.0 一致)。
+        tools_for_cb = tools or None
+
         # 同步 cb 丢线程池,避免阻塞 event loop
         try:
-            full_text = await asyncio.to_thread(self._sync_cb, prompt, [])
+            full_text = await asyncio.to_thread(
+                self._sync_cb, prompt, images=[], tools=tools_for_cb
+            )
         except Exception as e:  # noqa: BLE001 — LLM 调用失败不崩 agent
             log.warning("SyncLLMClientAdapter sync_cb 调用失败: %s", e)
             yield LLMChunk(
@@ -573,6 +579,11 @@ def _build_react_agent(
     sync_cb = _make_llm_callback(cm, ctx)
     llm_client = SyncLLMClientAdapter(sync_cb)
 
+    # v10.2:tools 透传——LLM 收到 registry 的工具 schema 时,
+    # SyncLLMClientAdapter 需把它接出来传给 sync_cb 的 messages 列表,
+    # 由 _make_llm_callback 的 cb 转发给 _nvidia_chat(tools=...)。
+    # 无 tools 时零回归(行为与 v10.1.0 完全一致)。
+
     # load_session:不存在则新建(带 system_prompt);存在则恢复历史 events
     session = ReactLoopAgent.load_session(
         session_store, session_id, system_prompt=system_prompt)
@@ -779,8 +790,8 @@ def _make_llm_callback(cm, ctx):
         if nv_keys:
             router = ProviderRouter(nv_keys, **load_router_config_from_env())
 
-            def cb(prompt, images=None):  # type: ignore[no-redef]
-                return _nvidia_chat(router, prompt, images)
+            def cb(prompt, images=None, tools=None):  # type: ignore[no-redef]
+                return _nvidia_chat(router, prompt, images, tools=tools)
 
             return cb
     except Exception as e:
@@ -791,7 +802,7 @@ def _make_llm_callback(cm, ctx):
         from src.core.logic import build_llm_client
         client = build_llm_client(cm)
 
-        def cb(prompt, images=None):  # type: ignore[no-redef]
+        def cb(prompt, images=None, tools=None):  # type: ignore[no-redef]
             image_paths = images or None
             chunks = []
             for chunk in client.chat_stream(
@@ -810,12 +821,13 @@ def _make_llm_callback(cm, ctx):
         return None
 
 
-def _nvidia_chat(router, prompt, images=None) -> str:
+def _nvidia_chat(router, prompt, images=None, tools=None) -> str:
     """用 ProviderRouter 发 NVIDIA chat/completions,流式拼接纯文本。
 
     prompt 支持 str 或 messages 列表(多轮 ReAct)。images 是帧 path 列表,
     NVIDIA 视频模型走 frames 字段(由 build_nvidia_payload 处理),这里只
-    转成 messages 不塞图(视频分析用 frames 流)。
+    转成 messages 不塞图(视频分析用 frames 流)。tools 是 OpenAI 兼容
+    工具 schema 列表,非 None 时透传进 payload(ReactLoopAgent 工具调用)。
     """
     import os
     from src.core.nvidia_models import build_nvidia_payload
@@ -835,6 +847,7 @@ def _nvidia_chat(router, prompt, images=None) -> str:
         enable_thinking=True,
         stream=False,
         max_tokens=int(os.environ.get("VAP_NV_MAX_TOKENS", "65536")),
+        tools=tools or None,
     )
     try:
         resp = router.post_nvidia(payload, timeout=120)
