@@ -1,96 +1,54 @@
-# v10.1.0 闭环补齐 — 任务状态
+# v10.2.0 Sprint1+2 工作流状态（终局记录）
 
-> 基于 5 个 explorer 子代理对真实代码的核查，对照《改进指南/下一步改进指南.md》。
-> 工作树基线：v9→v10 转型代码零提交屎山（221 条）。
-> 维护者：主控代理（Orchestrator） · 日期：2026-09-06 · 版本：10.1.0
+> 分支 `feat/v10.2-sprint1` · 22 提交 · 12 个新增 router/agent 测试文件 · +2300 行测试
+> 更新：2026-09-08
 
-## 已完成（本轮闭环）
+## 已完成并验证（P0/P1 核心闭环）
 
-### P0 收口
-- ✅ .gitignore 补 `config/runs.db-shm`/`runs.db-wal`（line 60-62）
-- ✅ README.md 升 v10.0.0（hero/tagline/简介/v10 新增能力/文档日期）
-- ✅ 旧测试去版本号：test_v59_skills_ui→test_skills_ui / test_v60_security→test_security_hardening / test_agent_prompt_v52→test_agent_prompt_sections（git mv，回归 39 passed）
-- ✅ error.tsx 上报 /api/logs（apiPostJson + 静默兜底）+ logs router 新增 POST /api/logs 端点
-- ✅ Button 加 success/error 反馈态（feedback prop + shake keyframe）
-- ✅ prompt_guard 补 HIDDEN_UNICODE（零宽 U+200B-200D/U+2060/U+FEFF）+ SYSTEM_SPOOF（system:/assistant:/developer: 伪冒）+ 6 新测试用例
+### Sprint 1：Agent 主线闭环（8 提交）
+- [x] `ProviderRouterClient` 补全（`src/core/provider_router_client.py`，7 用例全绿）
+- [x] react 路径 tools 透传（`SyncLLMClientAdapter`+`_make_llm_callback`+`_nvidia_chat`）
+- [x] `to_llm_schema` 改 OpenAI 兼容（真实 NVIDIA 400→200，`missing field type` 根因修复）
+- [x] ReactLoopAgent + SessionStore 全链路（legacy 零回归）
+- [x] 版本号五同步 v10.2.0 + CHANGELOG
 
-### P1 新模块（6 个，Wave 1 worker 并行交付，主控接入）
-- ✅ error_policy.py（ToolErrorKind + ErrorPolicy + 指数退避 + mark_unavailable）→ registry.execute 接入 `_execute_once` + 策略重试包装（policy=None 零回归）
-- ✅ structured_log.py（JSONFormatter + trace_context + install_json_logging 幂等）→ app.py lifespan 切 JSON 日志（失败回退纯文本）
-- ✅ vlm_client.py（VLMClient Protocol + Ollama/Cloud/Mock，httpx 条件依赖）+ agent_tools.create_vlm_describe_tool（16→17 工具）
-- ✅ sandbox.py（Sandbox Protocol + WindowsJobSandbox(pywin32) + LinuxLandlockSandbox + NullSandbox + build_sandbox 自动选型）
-- ✅ credentials/audit.py + rotation.py（CredentialAudit SQLite/WAL + KeyRotator rotate/revoke）
-- ✅ experience.py（ExperienceExtractor + ExperienceStore + SkillAdvisor 规则版）
+### Sprint 2：router 覆盖率冲刺（14 提交）
+| router | 覆盖率变化 | 用例数 | 测试文件 |
+|---|---|---|---|
+| media | 28%→100% | 13 | test_media_router.py |
+| metrics | 20%→98% | 14 | test_metrics_router.py |
+| models | 23%→**修复 422/latest-job/stream_closed** | 18 | test_models_router.py |
+| remote | 41%→100% | 13 | test_remote_router.py |
+| skills | 43%→94% | 14 | test_skills_router.py |
+| requests | 74%→100% | 14 | test_requests_router.py |
+| logs | 51%→89% | 8+4 | test_logs_router.py + stream |
+| agent | — | 5+11 | test_agent_router.py + react |
 
-### P1 接入（主控串行）
-- ✅ app.py lifespan 注入 SessionStore 单例（app.state.session_store）
-- ✅ runtime/__init__.py 导出 structured_log（JSONFormatter/trace_context/install_json_logging/get_trace_id）
-- ✅ registry.py 接入 ErrorPolicy（set_error_policy + execute 重试分级 + _execute_once 拆分）
+### 修复的真实 bug（非测试迁移）
+- **models.py download_stream 422**：`request` 缺类型标注被 FastAPI 当 query 参数
+- **models.py 下载流订阅旧 job**：多次 POST 同一模型后 stream 死等旧线程 → 改取 latest
+- **models.py stream_closed 顺序**：先置 closed 再推 `__close__`，避免多等 15s 心跳（对齐 analyzer_service）
+- **合跑 429 限流**：IP 限流器进程级单例跨文件叠加 → 测试 fixture 显式 `init_ip_limiter(0)`
+- **NVIDIA 400 missing field type**：VAP 私有 schema → 真实 API 复现 → OpenAI 兼容修复
 
-### P2 前端/脚本/文档（Wave 2 worker 交付）
-- ✅ Playwright E2E 5 spec（dashboard/analyze/agent/navigation/error_boundary）+ package.json e2e script + ci.yml e2e job（启后端→health wait→npm run e2e→artifact）
-- ✅ scripts/dev-setup.ps1 + dev-setup.sh（onboarding）
-- ✅ docs/ VitePress 骨架（config + index + 4 guide + package.json）
+## 验证证据（真实运行）
+- 全量标准子集：`pytest tests/`（ignore headless/e2e_smoke）＝ **902 passed, 3 skipped**（679s）
+- 11 个 router/agent 测试文件合跑：**121 passed**（63s）
+- `pyflakes src/ launcher.py` ＋ `ruff check src/ launcher.py`：**零告警**
+- Playwright E2E 23/23（Sprint1 时验证）
+- react 路径真实 NVIDIA chat 200 + `GET /api/agent/sessions` 持久化闭环
 
-### CI 质量门禁
-- ✅ ci.yml 去 `|| true`（测试真实失败阻断）
-- ✅ 加 `--cov=src --cov-report=term-missing --cov-fail-under=80`
-- ✅ build-windows 改 `needs: [test, e2e]`
+## 遗留（诚实披露）
+| 项 | 状态 | 说明 |
+|---|---|---|
+| surveillance router 测试 | ❌ 未落地 | 覆盖率 25%→约 40%；子代理被中断，`src/web/routers/surveillance.py` 需补 |
+| im_gateway router 测试 | ❌ 未落地 | 覆盖率 38%；`tests/test_im_gateway.py` 是 core 层 30 用例，web router 未覆盖 |
+| 全量覆盖率 ≥80% 门禁 | ⚠️ 未达成 | 约 68%→现约 70%+，surveillance/im_gateway 补齐后接近；analyzer_service 69% 仍低 |
+| 推送/发行版 | ⚠️ 待用户确认 | 分支 22 提交未 push、未 tag、未建 release（gh 未安装） |
+| models/yolo11n.pt | ✅ 已清理 | 已 gitignore，从跟踪移除 |
 
-## 验证日志（真实命令输出）
-
-### Python 后端
-```
-$ pytest tests/ --ignore=test_headless_server --ignore=test_e2e_smoke --ignore=test_nvidia_models --cov=src --cov-fail-under=80
-690 passed, 1 skipped, 998 warnings in 512.69s
-TOTAL coverage: 66%  ← 低于 80% 门禁(预期:serve.py/router 未测,真实 CI 会 fail-under)
-```
-注:全量覆盖率 66% < 80% 门禁。根因:`src/web/serve.py`(115 行 0%)、各 router 的端点层大量未单测覆盖(走 TestClient 集成测试覆盖部分)。这是**真实 CI 会 fail-under**的状态——按铁则不伪造,如实记录。降门禁到 66% 可让 CI 绿但违背质量意图;保持 80% 让 CI 红倒逼补测试是正解。本轮保留 80% 门禁,标记为**待补测试**项。
-
-```
-$ pytest tests/test_agent_framework.py tests/test_error_policy.py tests/test_prompt_guard.py tests/test_vlm_client.py tests/test_structured_log.py tests/test_sandbox.py tests/test_credential_audit.py tests/test_experience.py
-129 passed, 1 skipped  ← Wave1 6 新模块 + agent_framework 回归全绿
-```
-
-### pyflakes（CI 强制零告警）
-```
-$ pyflakes src/core/tools/registry.py src/core/tools/error_policy.py src/core/agent/prompt_guard.py
-  src/core/runtime/__init__.py src/core/runtime/structured_log.py src/core/vlm_client.py
-  src/core/runtime/sandbox.py src/core/credentials/audit.py src/core/credentials/rotation.py
-  src/core/agent/experience.py src/web/app.py src/web/routers/logs.py src/core/agent_tools.py
-exit 0  ← 零告警
-```
-
-### 前端
-```
-$ npx tsc --noEmit -p tsconfig.json  → 0 errors  ← Button/ error.tsx/ batch 修复后类型干净
-$ npm run lint  → 0 errors, 5 warnings(react-hooks/set-state-in-effect,既有页非本轮引入)
-```
-
-### Playwright E2E（worker 报告）
-```
-$ npx playwright test  → 23 passed(含原 smoke 3 + 新 5 spec 20)
-后端不可达时 20 skipped,0 失败(容错设计)
-```
-
-## 未完成 / 阻塞项（如实披露）
-
-### P1 未接入（留 v10.2）
-- ⚠️ ReactLoopAgent 未接 agent router：agent.py 仍走旧 AgentOrchestrator（/chat /run /run_stream），SessionStore 单例已注入 app.state 但 agent router 未消费。接入需重写 agent router 用 ReactLoopAgent + SessionStore.load/save，工作量 1-2d，本轮未做（避免破坏现有 /api/agent/chat 闭环）。
-- ⚠️ SSE 断线重连（id/Last-Event-ID/useSSE.ts）：sse.py 仅 heartbeat，未加 event id 序号 + Last-Event-ID 续推 + 前端 useSSE hook。
-- ⚠️ Turn 时间轴 API + 前端、run_store.checkpoint 长程断点、Subagent 多后端 backends/、凭据轮换前端、dashboard 时间轴+资源 mini 图、批量分片级进度前端、electron-updater 灰度、linux deb target + mac/linux build job。
-
-### P2 需外部环境（标"待验证"，守付费 API 红线）
-- IM 真实 token 闭环（Telegram bot 真实 getUpdates，需用户给 token）
-- Tailscale Serve 真实 tunnel（需用户装 Tailscale）
-- VLM 真实 key（Ollama/Cloud 真实 describe，需用户配 .env）
-- electron 真实打包（需 windows-latest CI runner + tag push）
-- 浏览器真实 E2E（Playwright 本地已验证，CI 待跑）
-
-### 覆盖率门禁
-- 全量覆盖率 66% < 80% 门禁。真实 CI push 会 fail-under。需补 serve.py/router 单测或下调门禁。本轮**保留 80%**（倒逼补测试），标记待补。
-
-## 发版状态
-- 版本号四同步：constants.py 10.1.0 / webapp+desktop package.json 10.1.0 / app.py version 10.1.0
-- CHANGELOG 加 [10.1.0] 条目
-- 待用户确认后：commit → push → tag v10.1.0 → gh release create
+## 下一步（收尾清单）
+1. 补 `tests/test_surveillance_router.py` + `tests/test_im_gateway_router.py`（覆盖率模型同上）
+2. 全量 `--cov-fail-under=80` 终验
+3. `git push origin feat/v10.2-sprint1`（需用户确认）
+4. tag `v10.2.0` + GitHub Release（需用户确认 + gh CLI）
