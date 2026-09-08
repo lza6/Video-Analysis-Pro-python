@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends
@@ -79,7 +80,12 @@ _ADAPTER_FACTORIES = {
 def _get_or_create_gateway(req: GatewayStartRequest) -> IMGateway:
     global _gateway
     if _gateway is None:
-        mailbox = IMMailbox(db_path=req.db_path) if req.db_path else IMMailbox()
+        # IMMailbox 用 config_dir + db_filename(非 db_path)——修复 2026-09-08
+        if req.db_path:
+            db = Path(req.db_path)
+            mailbox = IMMailbox(config_dir=str(db.parent), db_filename=db.name)
+        else:
+            mailbox = IMMailbox()
         adapter_objs = []
         for name in req.adapters:
             factory = _ADAPTER_FACTORIES.get(name)
