@@ -8,9 +8,10 @@
   --color-ink: oklch(0.16 0.028 265);
   --color-ink-2: oklch(0.21 0.035 268);
   --color-ink-3: oklch(0.27 0.04 270);
-  --color-accent: oklch(0.8 0.12 205);
-  --color-accent-2: oklch(0.68 0.19 295);
-  --color-accent-2-deep: oklch(0.62 0.19 295);
+  /* v10.2:反 AI 通用美学 — 主信号从泛蓝紫改为电光青 */
+  --color-accent: oklch(0.86 0.17 190);
+  --color-accent-2: oklch(0.62 0.19 295);
+  --color-accent-2-deep: oklch(0.56 0.17 295);
   --color-accent-3: oklch(0.75 0.15 340);
   --color-mist: oklch(0.9 0.012 260);
   --color-mute: oklch(0.72 0.02 260);
@@ -20,10 +21,13 @@
 
   --font-sans: "Noto Sans SC", ui-sans-serif, system-ui, "Microsoft YaHei", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  /* 数据/代码/时间戳统一等宽字体 — 记忆点:数字永远是 JetBrains Mono */
+  --font-data: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
 
-  /* 半径尺度:卡片统一 rounded-card,内部小卡 rounded-card-sm,pill 一律 rounded-full */
+  /* 半径尺度:容器弧形 rounded-card,操作件锐角 radius-btn(软硬对比) */
   --radius-card: 1.5rem;
   --radius-card-sm: 1rem;
+  --radius-btn: 0.375rem;
 
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -33,7 +37,10 @@ html {
 }
 
 body {
-  background: var(--color-ink);
+  /* 顶部电光青微晕(3%),反纯色单调背景 */
+  background:
+    radial-gradient(1200px 600px at 85% -10%, oklch(0.86 0.17 190 / 0.08), transparent 60%),
+    var(--color-ink);
   color: var(--color-mist);
   font-family: var(--font-sans);
   overflow-x: hidden;
@@ -64,6 +71,13 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: oklch(1 0 0 / 0.2);
+}
+
+/* 圆形按钮(旧 chip/胶囊)保留,新增锐角按钮基元(v10.2) */
+@layer components {
+  .btn-angular {
+    border-radius: var(--radius-btn);
+  }
 }
 
 /* ---------------------------- 玻璃层 ---------------------------- */
