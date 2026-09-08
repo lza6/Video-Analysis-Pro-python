@@ -76,6 +76,12 @@ config/cred_audit.db
 config/cred_audit.db-shm
 config/cred_audit.db-wal
 
+# 运行时下载的模型文件(体积大,勿入库)
+models/*.pt
+models/*.bin
+models/*.gguf
+models/*.exe
+
 # Playwright E2E 产物(webapp/)
 webapp/playwright-report/
 webapp/test-results/
