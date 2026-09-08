@@ -39,6 +39,11 @@ from fastapi.testclient import TestClient  # noqa: E402
 def module_app():
     """TestClient(app) 以 lifespan 为准构造(analyzer_service._loop 可用)。"""
     from src.web.app import app
+
+    # 测试禁用 IP 限流:多文件合跑时 POST 叠加超 10/min → 429(限流器是进程级单例)
+    from src.web import security as _sec
+    _sec.init_ip_limiter(0)
+
     with TestClient(app) as c:
         yield c
 
