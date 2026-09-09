@@ -72,6 +72,15 @@ config/im_gateway.db-wal
 config/agent_sessions.db
 config/agent_sessions.db-shm
 config/agent_sessions.db-wal
+config/agent_experiences.db
+config/agent_experiences.db-shm
+config/agent_experiences.db-wal
+config/agent_working_memory.db
+config/agent_working_memory.db-shm
+config/agent_working_memory.db-wal
+config/agent_triples.db
+config/agent_triples.db-shm
+config/agent_triples.db-wal
 config/cred_audit.db
 config/cred_audit.db-shm
 config/cred_audit.db-wal
@@ -89,3 +98,13 @@ webapp/.playwright/
 
 # 通用构建/导出产物（含 webapp/out/、docs/ 下生成的 out/ 等）
 out/
+
+# v10.3 构建产物/测试临时
+desktop/dist/
+desktop/*.zip
+desktop/test-*.js
+webapp/test-results/
+.agent-scratch/
+voiceover_placeholder.wav
+config/api_presets.json
+config/prompts.json

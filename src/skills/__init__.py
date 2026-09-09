@@ -3,6 +3,7 @@
 对外导出 Skill dataclass 与 load_skills 加载器。
 """
 from src.skills.loader import load_skills
+from src.skills.roster import resolve_skills_for_intent
 from src.skills.schema import MAX_DESCRIPTION_LEN, Skill
 from src.skills.state import (
     STATE_FILENAME,
@@ -19,4 +20,5 @@ __all__ = [
     "get_enabled_for",
     "set_enabled_state",
     "STATE_FILENAME",
+    "resolve_skills_for_intent",
 ]

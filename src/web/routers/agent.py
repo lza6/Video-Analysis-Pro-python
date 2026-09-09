@@ -26,7 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from ..deps import get_config_manager, get_job_store
+from ..deps import get_approval_bus, get_config_manager, get_job_store
 from ..security import require_auth, require_rate_limit
 
 log = logging.getLogger("web.agent")
@@ -44,6 +44,137 @@ class AgentChatRequest(BaseModel):
 class AgentRunRequest(BaseModel):
     job_id: str | None = None
     text: str | None = None  # 若已有 plan 可不传,复用上次
+
+
+class ApprovalDecisionRequest(BaseModel):
+    """前端对审批请求 pin 的决定(SSE approval-request 事件后回调)。"""
+
+    allow: bool = Field(..., description="True=批准执行 / False=拒绝")
+
+
+# 审批等待超时(秒)。工具 ask 后前端须在超时前调 decide;超时默认拒绝(安全侧)。
+_APPROVAL_TIMEOUT_SEC = float(os.environ.get("VAP_AGENT_APPROVAL_TIMEOUT", "60"))
+
+# 审批 SSE 事件环形缓冲(进程内,供 /run_stream 的 approval-request 事件复用)。
+# key = pin;value = 已格式化的 SSE 事件文本。容量有限,decide 后由前端的
+# /approval/pending 或直接回调消费。不参与业务决策(仅投递管道)。
+_APPROVAL_SSE_BUFFER: dict[str, str] = {}
+_APPROVAL_SSE_BUFFER_CAP = 64
+
+
+def _buffer_approval_sse(pin: str, payload: dict) -> None:
+    """把一次审批请求的 SSE 事件文本缓冲起来,供 /run_stream 推送。"""
+    _APPROVAL_SSE_BUFFER[pin] = _sse(_APPROVAL_SSE_EVENT, payload)
+    # 防内存泄漏:只留最近 _APPROVAL_SSE_BUFFER_CAP 条
+    if len(_APPROVAL_SSE_BUFFER) > _APPROVAL_SSE_BUFFER_CAP:
+        oldest = next(iter(_APPROVAL_SSE_BUFFER))
+        _APPROVAL_SSE_BUFFER.pop(oldest, None)
+
+
+# 会话级审批事件队列(react /run_stream 与 approval_fn 之间传递)。
+# 懒创建、绑定当前运行 loop:审批事件由 approval_fn(在 run_turn task 中)put,
+# run_stream 生成器 get 消费推送前端。同一进程只建一个,单用户桌面场景够用。
+_APPROVAL_SSE_QUEUE: Any = None
+_APPROVAL_QUEUE_LOCK: Any = None
+
+
+def _approval_sse_queue() -> Any:
+    """返回审批事件队列(懒创建,绑定当前运行 loop,线程安全)。"""
+    import asyncio as _asyncio
+
+    global _APPROVAL_SSE_QUEUE, _APPROVAL_QUEUE_LOCK
+    q = _APPROVAL_SSE_QUEUE
+    if q is not None:
+        return q
+    if _APPROVAL_QUEUE_LOCK is None:
+        import threading as _threading
+        _APPROVAL_QUEUE_LOCK = _threading.Lock()
+    with _APPROVAL_QUEUE_LOCK:
+        if _APPROVAL_SSE_QUEUE is None:
+            # 当前线程未必是事件循环线程(run_stream 生成器在 uvicorn loop,
+            # 测试线程可能无 loop)。直接构造,绑定不依赖 loop——Python
+            # 3.10+ 的 asyncio.Queue 在首次 await 时自动绑定 running loop。
+            _APPROVAL_SSE_QUEUE = _asyncio.Queue()
+        return _APPROVAL_SSE_QUEUE
+
+
+def _make_sse_emitting_approval_fn() -> Any:
+    """构造「先 emit SSE 再 wait」的审批回调。
+
+    MAJOR-1:把写工具触发 Ask 时的审批请求作为 SSE 事件推送。实现方式——
+    用 asyncio.Queue 承载审批事件文本(run_stream 生成器消费推送),同时在
+    模块级 ring buffer 留底(供事后重查 / 无 run_stream 时前端轮询 pending)。
+    """
+
+    async def _approval_fn(call, sig) -> bool:
+        from src.web.deps import get_approval_bus
+
+        bus = get_approval_bus()
+        try:
+            pin = bus.request_approval(
+                {"tool": call.name, "args": call.args or {},
+                 "reason": str(getattr(sig, "prompt", "") or ""),
+                 "priority": getattr(sig, "priority", "write") or "write"})
+        except Exception:  # noqa: BLE001 — 投递失败视为拒绝(安全侧)
+            log.warning("ApprovalBus 投递失败,按拒绝处理: %s", call.name)
+            return False
+        payload = {
+            "pin": pin,
+            "tool": call.name,
+            "args": call.args or {},
+            "reason": str(getattr(sig, "prompt", "") or ""),
+            "priority": getattr(sig, "priority", "write") or "write",
+            "timeout": _APPROVAL_TIMEOUT_SEC,
+        }
+        sse_text = _sse(_APPROVAL_SSE_EVENT, payload)
+        _buffer_approval_sse(pin, payload)
+        # 推给正在监听的 /run_stream 生成器(无人消费则丢弃,超时 deny 兜底)
+        try:
+            _approval_sse_queue().put_nowait(sse_text)
+        except Exception:  # noqa: BLE001
+            pass
+        decision = await bus.wait_decision_async(pin, timeout=_APPROVAL_TIMEOUT_SEC)
+        return bool(decision)
+
+    return _approval_fn
+
+
+# ============================ 审批端点 (react 路径) ============================
+
+
+@router.post(
+    "/approval/{pin}/decide",
+    dependencies=[Depends(require_auth)],
+)
+async def approval_decide(pin: str, req: ApprovalDecisionRequest) -> dict:
+    """前端审批回调:对 SSE approval-request 事件里的 pin 做允许/拒绝。
+
+    Args:
+        pin: SSE 事件 approval-request.data.pin。
+        req: {allow: bool}。
+
+    Returns:
+        {"decided": bool}:decided=True 表示首次成功(工具继续/被拒),
+        False 表示 pin 未知或已决定(幂等,重复回调不生效)。
+    """
+    bus = get_approval_bus()
+    decided = bus.decide(pin, req.allow)
+    return {"decided": decided}
+
+
+@router.get(
+    "/approval/pending",
+    dependencies=[Depends(require_auth)],
+)
+async def approval_pending() -> dict:
+    """当前所有未决审批请求(供前端轮询 / SSE 首次连接推送)。
+
+    Returns:
+        {"pending": [{pin, tool, args, reason, priority?}, ...]}。
+        每项字段来自 ApprovalBus.request_approval 登记的 ask 字典。
+    """
+    bus = get_approval_bus()
+    return {"pending": bus.pending_requests()}
 
 
 # ============================ backend 选择 ============================
@@ -311,18 +442,49 @@ async def run_stream(request: Request, job_id: str | None = None) -> StreamingRe
 async def _react_run_stream(
     request: Request, job_id: str | None,
 ) -> StreamingResponse:
-    """react 路径 /run_stream:await run_turn 后一次性投 done event。
+    """react 路径 /run_stream:await run_turn,审批事件实时推 SSE。
 
     session_id 从 query param 取(无则新建),跑完 save 持久化。
     逐 phase 流式留 v10.3(需 TurnHooks + asyncio.Queue 投递)。
+
+    v10.2 (B-FIN-2 MAJOR-1):run_turn 期间写工具触发 Ask 时,approval_fn
+    会把 approval-request 事件 put 进审批队列。run_turn 在
+    wait_decision_async 处让出事件循环,本 async 生成器在等待间隙轮询
+    队列把事件推给前端 SSE。前端收到后调 approve 端点,decide() set
+    Event,wait_decision_async 解除,run_turn 继续(工具执行 / 拒绝)。
     """
+    import asyncio as _asyncio
+
     session_id = request.query_params.get("session_id") or uuid.uuid4().hex
     agent, session, session_store = _build_react_agent(
         request, session_id, job_id, "")
-    result = await agent.run_turn(session, "")
-    session_store.save(session)
+    queue = _approval_sse_queue()
 
-    def gen():
+    async def _run_turn_and_save() -> Any:
+        result = await agent.run_turn(session, "")
+        session_store.save(session)
+        return result
+
+    turn_task = _asyncio.create_task(_run_turn_and_save())
+
+    async def gen() -> AsyncIterator[str]:
+        while True:
+            if turn_task.done():
+                break
+            try:
+                # 要么取到新审批事件(前端弹审批 UI),要么 50ms 超时后
+                # 重新检查 run_turn 是否已完成(stream 由此结束)。
+                ev = await _asyncio.wait_for(queue.get(), timeout=0.05)
+                yield ev
+            except _asyncio.TimeoutError:
+                continue
+        # 终局排空(最后时刻 put 的审批事件)
+        while not queue.empty():
+            try:
+                yield queue.get_nowait()
+            except Exception:  # noqa: BLE001
+                break
+        result = turn_task.result()
         yield _sse("done", {
             "done": True,
             "session_id": session_id,
@@ -519,6 +681,73 @@ def _map_event_to_phase(event: Any) -> Dict[str, Any]:
 
 # ============================ react 路径:agent 构造 ============================
 
+# 审批 SSE 事件名:前端监听 `event: approval-request` 后调
+# POST /api/agent/approval/{pin}/decide 回调。
+_APPROVAL_SSE_EVENT = "approval-request"
+
+
+def _sse_approval(call: Any, sig: Any, pin: str) -> str:
+    """把一次工具审批请求格式化成 SSE 事件(前端据此弹审批 UI)。
+
+    data 字段:
+      - pin: 前端 decide 回调必传的审批唯一 id
+      - tool / args / reason: 展示给用户的工具名 / 参数 / 审批理由
+      - priority: 审批优先级(scope_guard Ask.priority,缺省 "write")
+      - timeout: 超时秒数(超时默认拒绝)
+    """
+    return _sse(_APPROVAL_SSE_EVENT, {
+        "pin": pin,
+        "tool": call.name,
+        "args": call.args or {},
+        "reason": str(getattr(sig, "prompt", "") or ""),
+        "priority": getattr(sig, "priority", "write") or "write",
+        "timeout": _APPROVAL_TIMEOUT_SEC,
+    })
+
+
+def _install_tool_guard(
+    registry: Any,
+    *,
+    approval_fn: Any = None,
+    sandbox: Any = None,
+    enabled: bool = True,
+    emit_sse_approval: bool = True,
+) -> None:
+    """把 ScopeGuard + approval + sandbox 装配到 react 路径的 ToolRegistry。
+
+    延迟 import scope_guard(避免启动期强依赖)。`build_sandbox()` 在无
+    pywin32/landlock 平台返回 NullSandbox(空操作,enter/run/exit 直通),
+    install_tool_guard 在 sandbox 为 NullSandbox 时仍安全——registry 只在
+    `_sandbox_enabled and _sandbox is not None` 时进沙箱,NullSandbox 的
+    run(coro) 就是 `await coro`,不阻断工具执行(见 registry._execute_once)。
+
+    v10.2 (B-FIN-2 MAJOR-1):approval_fn 为 None 时默认注入「先 emit SSE 再
+    wait」的审批回调(经 asyncio.Queue 把 approval-request 事件推给
+    /run_stream 生成器,同时缓冲留底)。emit_sse_approval=False 可显式
+    关闭(测试隔离/纯默认 behavior 场景)。
+
+    Args:
+        registry: 已注册好工具的 ToolRegistry。
+        approval_fn: 审批回调。None = 使用默认 SSE-emitting ApprovalBus
+            实现(先 emit approval-request 事件,再异步等待;超时默认拒绝)。
+        sandbox: build_sandbox() 产物(NullSandbox / WindowsJobSandbox /
+            LinuxLandlockSandbox)。None = 不装配沙箱(零回归)。
+        enabled: 是否启用沙箱(registry 层再受 VAP_SANDBOX_ENABLED 控制,
+            见 set_sandbox 语义:enabled=False 时即便 sandbox 非 None 也不包)。
+    """
+    from src.core.tools.scope_guard import install_tool_guard
+
+    if approval_fn is None and emit_sse_approval:
+        approval_fn = _make_sse_emitting_approval_fn()
+
+    install_tool_guard(
+        registry,
+        approval_fn=approval_fn,
+        sandbox=sandbox,
+        enabled=enabled,
+    )
+
+
 def _build_react_agent(
     request: Request,
     session_id: str,
@@ -530,6 +759,12 @@ def _build_react_agent(
     返回 (agent, session, session_store)。
     - 从 app.state.session_store 取 SessionStore 单例;不存在则降级新建
     - 用 register_legacy_tools 注册 17 个老工具到新 ToolRegistry
+    - v10.2 (B-ASSEMBLE):注入监督层 + 工具范围守卫(审批/sandbox)
+        - 监督层:AgentConfig(supervisor=Supervisor.from_env()),
+          `VAP_AGENT_SUPERVISOR` 默认关 → None → 行为零回归
+        - 工具守卫:install_tool_guard,approval_fn 走 ApprovalBus
+          (请求级 SSE 回调,超时默认拒绝);sandbox 用 build_sandbox()
+          自动选型,`VAP_SANDBOX_ENABLED` 默认 false → 不进沙箱
     - SyncLLMClientAdapter 桥接 _make_llm_callback 的同步 cb
     - system_prompt 复用 build_agent_system_prompt(与 legacy 一致)
     - session 不存在则新建(带 system_prompt);存在则 load(历史 events 重建)
@@ -537,6 +772,9 @@ def _build_react_agent(
     # 延迟 import 避免循环依赖与启动期强依赖
     from src.core.agent.loop import AgentConfig, ReactLoopAgent
     from src.core.agent.session import SessionStore
+    from src.core.agent.supervisor import Supervisor
+    from src.core.memory.connector import MemoryLayeredConnector
+    from src.core.runtime.sandbox import build_sandbox
     from src.core.tools.adapter import register_legacy_tools
     from src.core.tools.registry import ToolRegistry
     from src.core.agent_orchestrator import build_agent_system_prompt
@@ -551,19 +789,51 @@ def _build_react_agent(
     ctx = _AgentContext(request, job_id)
     register_legacy_tools(registry, lambda: ctx)
 
+    # v10.2 (B-ASSEMBLE):工具范围守卫装配(审批走 ApprovalBus + SSE,
+    # 超时默认拒绝;sandbox 自动选型,VAP_SANDBOX_ENABLED 默认 false)。
+    # approval_fn 走 SSE-emitting 实现:写工具 Ask 时把 approval-request
+    # 事件推给 /run_stream 生成器(前端弹审批 UI),前端调
+    # POST /api/agent/approval/{pin}/decide 回调;超时默认 deny(安全侧)。
+    # 移除 B-FIN-2 MAJOR-2 前阻塞事件循环的死锁:等待走 async Event。
+    _install_tool_guard(
+        registry,
+        sandbox=build_sandbox(),
+        enabled=(os.environ.get("VAP_SANDBOX_ENABLED", "false").strip().lower()
+                 in ("1", "true", "yes", "on")),
+    )
+
     # 工具描述(供 system_prompt 用)
     tool_descs = "\n".join(
         f"- {s['function']['name']}: {s['function']['description']}"
         for s in registry.schemas()
     )
 
-    # active skills 可选加载(失败不阻断)
+    # active skills 可选加载(失败不阻断)。
+    # v10.2 (B-FIN-2 MAJOR-4):`VAP_SKILLS_ROSTER=1` 时换用
+    # src.skills.roster.resolve_skills_for_intent(渐进披露 + 领域语义路由);
+    # 默认 0 保持旧 match_skills 行为(零回归)。
     active_skills: Optional[str] = None
+    roster_skills: list[str] = []
+    use_roster = os.environ.get("VAP_SKILLS_ROSTER", "0").strip().lower() in (
+        "1", "true", "yes", "on")
     try:
         from src.skills import load_skills  # type: ignore
-        from src.core.agent_prompt import match_skills
+        from src.utils.constants import CONFIG_DIR
+        from pathlib import Path as _Path
         skills = load_skills()
-        if skills and text:
+        if use_roster and text:
+            try:
+                from src.skills.roster import resolve_skills_for_intent
+                roster_hits = resolve_skills_for_intent(
+                    text, _Path(CONFIG_DIR) / "skills")
+                roster_skills = [s.name for s in roster_hits]
+            except Exception as e:  # noqa: BLE001 — roster 失败回退旧行为
+                log.debug("roster 匹配失败,回退 match_skills: %s", e)
+                roster_skills = []
+        if roster_skills:
+            active_skills = "、".join(roster_skills)
+        elif skills and text:
+            from src.core.agent_prompt import match_skills
             active_skills = match_skills(text, skills)
     except Exception as e:  # noqa: BLE001 — skills 可选,失败不阻断
         log.debug("skills 加载失败(react 路径,不阻断): %s", e)
@@ -589,8 +859,19 @@ def _build_react_agent(
     session = ReactLoopAgent.load_session(
         session_store, session_id, system_prompt=system_prompt)
 
+    # v10.2 (B-FIN-2 MAJOR-3):装配分层记忆。MemoryLayeredConnector.from_env
+    # 读 VAP_MEMORY_LAYERED(默认 1=开);=0 时返回 enabled=False 的实例
+    # (working/experience/triples 全 None,record/inject 均为 no-op),
+    # 行为与 None 等价。这里显式传 feature_flag 使测试可精确断言。
+    memory_connector = MemoryLayeredConnector.from_env()
+    if memory_connector is not None and not memory_connector.enabled:
+        memory_connector = None
+
     agent = ReactLoopAgent(
-        AgentConfig(system_prompt=system_prompt, max_steps=8),
+        AgentConfig(supervisor=Supervisor.from_env(),
+                    system_prompt=system_prompt,
+                    memory=memory_connector,
+                    max_steps=8),
         llm_client,
         registry,
         store=session_store,

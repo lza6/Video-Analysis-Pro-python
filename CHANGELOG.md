@@ -1,5 +1,37 @@
 # Changelog — TingFeng Hermes
 
+## [10.3.0] — 2026-09-09 · 全功能闭环：监督层/写审批/记忆分层/skills闭环/Electron黑匣子/视频电商浏览器工具集/MCP/反AI美学 + Windows安装包
+
+### 核心：指南 v2 全部 P0-P3 批次真实落地 + 独立 Critic PASS + 覆盖率 80.25% 门禁达标
+
+**P0-1 Agent 监督层**（`src/core/agent/supervisor.py`）：StuckDetector(同 action/同 tool_args/error 循环 3 规则) + ContextCompressor(事件/字符超阈→中文摘要注入,保留最近 N 轮) + BudgetGuard(per-turn 50k/累计 500k token,超限 BUDGET)；`loop.py` 接入三监督点；`VAP_AGENT_SUPERVISOR` 默认关零回归；TurnStopReason 加 STUCK/BUDGET。
+
+**P0-2 写审批 + sandbox 接线**（`src/core/tools/scope_guard.py`）：读 allow/写 ask/危险写(delete/cut/IM send)必须审批三级决策表 + `VAP_ALLOW_WRITE_{GENERAL,CUT,DELETE}` 分级开关；`registry.set_approval_fn/set_sandbox` 零调用缺口补齐；`deps.py` ApprovalBus(request→pin→decide, 超时默认 deny) + 异步 `wait_decision_async`(asyncio.Event 不阻塞事件循环)；`agent.py` SSE 审批投递 + `POST /api/agent/approval/{pin}/decide` + `GET /approval/pending`；webapp agent 页审批弹窗(允许/拒绝回调)。
+
+**P1-1 记忆分层**（`src/core/memory/{working,triplestore,connector}`）：Working 热层(SQLite TTL 24h 注入 system 段) + ExperienceStore FTS5 trigram 混合评分(0.3bm25+0.4quality+0.3recency, 中文召回实测) + 时序/图记忆(triple 表 subject/between/object 查询)；`_build_react_agent` 装配 `MemoryLayeredConnector.from_env()`(`VAP_MEMORY_LAYERED=0` 归一 None)；turn 开始注入/结束 record。
+
+**P1-2 skills 闭环**（`src/skills/{distiller,validator,spectre,scoring,roster}`）：蒸馏(Experience ≥3 次稳定链→草稿) + 三重验证(跨域/predict/排他) + SkillSpector 安全扫描(指令注入/危险命令/密钥/URL 白名单,命中→security_warning 默认不自动 enabled) + 达尔文棘轮(new/improved/rejected 原子写) + roster 渐进披露(按 intent 领域词路由)；`/api/skills/{ratchet,distill}` 端点 + `VAP_SKILLS_ROSTER` 装配开关。
+
+**P1-3 Electron 壳**（`desktop/{log-store,crash-diagnostics}.js`）：LogStore 黑匣子(2000 滚动+level 过滤+搜索+密钥脱敏) + 崩溃断路器(5次/60s→冻结 5min auto re-arm) + 诊断 zip 导出 + autoUpdater 代码落地(electron-updater,无 feed 安全降级) + webapp logs 页黑匣子 UI(SSE+IPC 合并/过滤/搜索/导出诊断包)。
+
+**P2-1 视频工具集**（`src/core/tools/media_gen/*`）：subtitle(SRT/VTT)+clip(create_cut_clip 归 CUT 审批)+voiceover(Mock 占位)+shortvideo(9:16 裁剪+字幕烧录+BGM)；`_providers.py` ASR/TTS/VideoGen Protocol+Mock(守付费红线)；`register_media_gen_tools` 注册导出。
+
+**P2-2 电商/PPT/营销 skills**（`config/skills/{ecommerce-merchant,ecommerce-shopper,ppt-deck,marketing-publish}`）：4 SKILL.md(spectre clean, 写操作审批+Mock) + `role_template` MERCHANT/SHOPPER/MARKETER_ROLE + roster 领域词路由。
+
+**P2-3 浏览器/GUI 自动化**（`src/core/tools/web_auto/{browser,cdp}` + `desktop/cua-service.js`）：BrowserTool(Playwright 7 工具, snapshot/click/fill 真实可用) + CdpTool(5 工具) + CUA(截图 mock+capturePage 优先)；读放行/写 ask 分类入 scope_guard。
+
+**P3-1 MCP 双形态**（`src/mcp/{server,run}`）：纯 stdlib JSON-RPC 2.0 stdio server(initialize/tools/list/tools/call) + `src/config/mcp/tools_allowlist.json` 双闸白名单(读工具+media_gen 安全项, 写工具需 `VAP_MCP_ALLOW_WRITE=1`)；stdio 冒烟 17 工具 schema 实测。
+
+**P3-2 反 AI-slop 设计**（`webapp/src/components/charts/*` + globals.css）：电光青语义色阶/动效 token + Sparkline/MetricTile/BarStrip(SVG, 数据字体/锐角/悬停) + metrics 页接入 + settings/DESIGN.md 反模式禁令+10 品质。
+
+**工程/收尾**：CI 覆盖率门禁 80.25% 达标；全量标准子集 1324 passed + 2 skipped；Playwright E2E 23 passed(真实 chromium)；pyflakes 零告警；ruff F 级零错误；硬编码密钥扫描干净；`Setup.exe` Windows NSIS 安装包(697MB, 含 venv+src+config+webapp-out, 小白双击即用)。
+
+### 验证（真实运行）
+- 全量 `pytest tests/` 标准子集 + `--cov-fail-under=80` → `TOTAL 80.25%`, 1324 passed + 2 skipped
+- Playwright `npx playwright test` → 23 passed（dashboard/analyze/agent/navigation/error_boundary/smoke）
+- `pyflakes src/ launcher.py` 零告警；`ruff --select F` All checks passed；密钥扫描干净
+- 安装包 `desktop/dist/TingFeng Hermes Setup 10.3.0.exe` 已产出（含 unpacked 资源核验）
+
 ## [10.2.0] — 2026-09-07 · Agent 主线闭环 + OpenAI 兼容工具 schema + 断线续传基座
 
 ### 核心：ReactLoopAgent 接 agent router 全链路 + 修复 NVIDIA 真实 400 + CI 覆盖率冲刺

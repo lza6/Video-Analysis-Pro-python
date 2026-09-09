@@ -5,6 +5,8 @@ import { apiGet, apiPostJson } from "@/lib/api";
 import type { MetricsResponse } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { MetricTile } from "@/components/charts";
+import { BarStrip } from "@/components/charts";
 
 export default function MetricsPage() {
   const [jobs, setJobs] = useState<{ job_id: string; video_name: string; status: string }[]>([]);
@@ -74,14 +76,28 @@ export default function MetricsPage() {
         <>
           {avgEntries.length > 0 && (
             <div className="grid sm:grid-cols-3 gap-4">
-              {avgEntries.map(([k, v]) => (
-                <Card key={k} className="p-5 text-center">
-                  <div className="text-3xl font-black text-gradient">
-                    {typeof v === "number" ? v.toFixed(1) : v}
-                  </div>
-                  <div className="text-xs text-mute mt-1">{k}</div>
-                </Card>
-              ))}
+              {avgEntries.map(([k, v]) => {
+                const series =
+                  data.series && data.series.timestamps.length > 0
+                    ? k === "brightness"
+                      ? data.series.brightness
+                      : k === "saturation"
+                        ? data.series.saturation
+                        : k === "sharpness"
+                          ? data.series.sharpness
+                          : undefined
+                    : undefined;
+                return (
+                  <MetricTile
+                    key={k}
+                    label={k}
+                    value={typeof v === "number" ? v.toFixed(1) : String(v)}
+                    hint="平均"
+                    tone={typeof v === "number" && v >= 0.6 ? "ok" : "mute"}
+                    trend={series}
+                  />
+                );
+              })}
             </div>
           )}
 
@@ -96,9 +112,37 @@ export default function MetricsPage() {
           {data.series && data.series.timestamps.length > 0 && (
             <Card className="p-5">
               <h3 className="text-sm font-medium text-white mb-3">时间序列</h3>
-              <div className="text-xs text-mute font-mono">
+              <div className="text-xs text-mute font-mono mb-4">
                 {data.series.timestamps.length} 个采样点
               </div>
+              <BarStrip
+                items={[
+                  {
+                    key: "brightness",
+                    label: "亮度",
+                    value: data.series.brightness[data.series.brightness.length - 1] ?? 0,
+                    max: 1,
+                    tone: "accent",
+                    hint: "末采样点",
+                  },
+                  {
+                    key: "saturation",
+                    label: "饱和度",
+                    value: data.series.saturation[data.series.saturation.length - 1] ?? 0,
+                    max: 1,
+                    tone: "dim",
+                    hint: "末采样点",
+                  },
+                  {
+                    key: "sharpness",
+                    label: "清晰度",
+                    value: data.series.sharpness[data.series.sharpness.length - 1] ?? 0,
+                    max: 1,
+                    tone: "ok",
+                    hint: "末采样点",
+                  },
+                ]}
+              />
             </Card>
           )}
         </>

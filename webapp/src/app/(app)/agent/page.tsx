@@ -3,11 +3,10 @@
 import { useState } from "react";
 import { apiPostJson, apiUrl, ApiError } from "@/lib/api";
 import type {
+  AgentApprovalRequest,
   AgentChatResponse,
-  AgentRunResponse,
   AgentRunStreamStepEvent,
   AgentRunStreamDoneEvent,
-  AgentRunStreamType,
 } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -15,6 +14,21 @@ import { Card } from "@/components/ui/Card";
 interface Msg {
   role: "user" | "agent";
   text: string;
+}
+
+/** 写工具审批决定结果(调 POST /api/agent/approval/{pin}/decide)。 */
+interface ApprovalDecisionResponse {
+  decided: boolean;
+}
+
+/** 待审批弹窗状态:null=无弹窗;非 null 显示工具名/参数/原因 + 允许/拒绝。 */
+interface PendingApproval {
+  pin: string;
+  tool: string;
+  args: Record<string, unknown>;
+  reason: string;
+  priority: string;
+  timeout: number;
 }
 
 /** 流式读取 SSE,逐个解析 event。 */
@@ -50,9 +64,54 @@ export default function AgentPage() {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [busy, setBusy] = useState(false);
   const [jobId, setJobId] = useState("");
+  const [approval, setApproval] = useState<PendingApproval | null>(null);
+  const [approvalBusy, setApprovalBusy] = useState(false);
 
   const appendAgent = (text: string) =>
     setMsgs((m) => [...m, { role: "agent", text }]);
+
+  /** 处理 run_stream 收到的 approval-request 事件:弹审批 UI。 */
+  const handleApproval = (data: string) => {
+    let payload: unknown = null;
+    try {
+      payload = data ? JSON.parse(data) : null;
+    } catch {
+      payload = null;
+    }
+    if (!payload || typeof payload !== "object") return;
+    const p = payload as Partial<AgentApprovalRequest>;
+    if (typeof p.pin !== "string" || !p.pin) return;
+    setApproval({
+      pin: p.pin,
+      tool: p.tool ?? "(未知工具)",
+      args: (p.args ?? {}) as Record<string, unknown>,
+      reason: p.reason ?? "",
+      priority: p.priority ?? "write",
+      timeout: typeof p.timeout === "number" ? p.timeout : 60,
+    });
+  };
+
+  /** 允许/拒绝当前审批(调后端 decide 端点,超时默认 deny 兜底)。 */
+  const decideApproval = async (allow: boolean): Promise<void> => {
+    if (!approval || approvalBusy) return;
+    setApprovalBusy(true);
+    const pin = approval.pin;
+    try {
+      const r = await apiPostJson<ApprovalDecisionResponse>(
+        `/api/agent/approval/${encodeURIComponent(pin)}/decide`,
+        { allow },
+      );
+      appendAgent(
+        `${allow ? "✅" : "⛔"} 审批[${r.decided ? "已生效" : "未生效(重复/已超时)"}] 工具=${approval.tool}`,
+      );
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : String(e);
+      appendAgent(`⚠️ 审批回调失败: ${msg}`);
+    } finally {
+      setApprovalBusy(false);
+      setApproval(null);
+    }
+  };
 
   /** chat 后自动循环执行 plan(SSE 流式),每步实时投到对话流。 */
   const autoRunPlan = async (jobIdParam: string): Promise<void> => {
@@ -67,6 +126,10 @@ export default function AgentPage() {
     }
     try {
       for await (const { event, data } of readSSE(res)) {
+        if (event === "approval-request") {
+          handleApproval(data);
+          continue;
+        }
         if (event !== "step" && event !== "done") continue;
         let payload:
           | AgentRunStreamStepEvent
@@ -189,6 +252,48 @@ export default function AgentPage() {
           </Button>
         </div>
       </Card>
+
+      {approval && (
+        <Card className="p-5 border border-accent/40 shadow-lg">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-base font-bold text-white">
+                审批请求: {approval.tool}
+              </h3>
+              <p className="text-xs text-mute mt-0.5">
+                {approval.reason || "写操作需人工审批"}
+                <span className="ml-2 opacity-70">
+                  (priority: {approval.priority} · {approval.timeout}s 内决定, 超时默认拒绝)
+                </span>
+              </p>
+            </div>
+          </div>
+          {Object.keys(approval.args).length > 0 && (
+            <pre className="mt-3 rounded-card-sm glass-chip px-3 py-2 text-xs text-mist whitespace-pre-wrap overflow-x-auto max-h-32">
+              {JSON.stringify(approval.args, null, 2)}
+            </pre>
+          )}
+          <div className="flex gap-3 mt-4">
+            <Button
+              variant="primary"
+              onClick={() => decideApproval(true)}
+              disabled={approvalBusy}
+            >
+              允许
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => decideApproval(false)}
+              disabled={approvalBusy}
+            >
+              拒绝
+            </Button>
+            <span className="text-xs text-mute self-center ml-auto">
+              {approvalBusy ? "提交中…" : "超时(60s)将默认拒绝"}
+            </span>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

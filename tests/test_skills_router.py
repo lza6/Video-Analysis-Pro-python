@@ -302,3 +302,83 @@ def test_generate_import_failure(client, monkeypatch):
     body = r.json()
     assert body["ok"] is False
     assert body["error"]
+
+
+# ---------------------------------------------------------------------------
+# POST /api/skills/ratchet (v10.2 B-FIN-2 MAJOR-4)
+# ---------------------------------------------------------------------------
+
+
+def test_ratchet_returns_new_for_category(client, tmp_path, monkeypatch):
+    """ratchet 新 skill -> ratchet=new + score>0(已加载 skill 内定位路径)。"""
+    from src.utils.constants import CONFIG_DIR
+    # 把 loader root + scoring scores 都指到 tmp,隔离不污染项目 config
+    import src.skills.loader as skills_loader_mod
+    import src.skills.scoring as scoring_mod
+    skills_root = tmp_path / "skills"
+    skills_root.mkdir(parents=True, exist_ok=True)
+    _write_skill(skills_root, "parking-test")
+    monkeypatch.setattr(skills_loader_mod, "_default_root", lambda: skills_root)
+    monkeypatch.setattr(scoring_mod, "_scores_path",
+                        lambda p=tmp_path / "scores.json": p)
+
+    r = client.post("/api/skills/ratchet", json={"skill_name": "parking-test"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    assert body["ratchet"] in ("new", "improved")
+    assert body["score"] > 0
+    assert (tmp_path / "scores.json").exists()
+
+
+def test_ratchet_unknown_skill(client):
+    """未加载的 skill_name -> ok=False,不 500。"""
+    r = client.post("/api/skills/ratchet", json={"skill_name": "not-exist"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# POST /api/skills/distill (v10.2 B-FIN-2 MAJOR-4)
+# ---------------------------------------------------------------------------
+
+
+def test_distill_empty_experience_store(client, monkeypatch, tmp_path):
+    """ExperienceStore 默认库无记录 -> ok=False + reason(不 500)。"""
+    monkeypatch.setattr(
+        "src.utils.constants.CONFIG_DIR", str(tmp_path),
+    )
+    r = client.post("/api/skills/distill", json={})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is False
+    assert "reason" in body or "error" in body
+
+
+def test_distill_generates_draft(client, monkeypatch, tmp_path):
+    """预置 ExperienceStore >=3 次经验 -> 蒸馏出草稿(ok=True + markdown)。"""
+    from src.core.agent.experience import Experience, ExperienceStore
+    import time
+
+    # 把经验库指到 tmp(路由内 ExperienceStore() 用默认路径 config/
+    # agent_experiences.db,故 patch 默认 db 常量)
+    db = tmp_path / "agent_experiences.db"
+    store = ExperienceStore(str(db))
+    for i in range(3):
+        store.record(Experience(
+            intent="停车场找车牌",
+            tool_chain=["extract_frames", "detect_vehicles"],
+            success=True, quality_score=0.9, timestamp=time.time(),
+            session_id=f"s{i}",
+        ))
+    monkeypatch.setattr("src.utils.constants.CONFIG_DIR", str(tmp_path))
+
+    r = client.post("/api/skills/distill", json={"intent": "停车场"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    assert body["intent"] == "停车场找车牌" or body["intent"]
+    assert body["occurrences"] >= 3
+    assert body["skill_name"]
+    assert "markdown" in body

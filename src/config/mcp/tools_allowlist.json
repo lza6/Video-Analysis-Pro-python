@@ -1,0 +1,22 @@
+{
+  "_comment": "MCP 对外暴露的工具白名单。默认只允许读工具 + mock 安全项；写操作默认不放行。",
+  "default_tools": [
+    "get_video_meta",
+    "get_frame_details",
+    "search_web",
+    "search_visual",
+    "search_kb",
+    "search_by_image",
+    "scan_videos",
+    "summarize_hits",
+    "trace_item",
+    "point_at_object",
+    "web_browser_snapshot",
+    "web_browser_screenshot",
+    "cdp_list_targets",
+    "cdp_attach",
+    "cdp_evaluate",
+    "make_subtitle",
+    "make_voiceover"
+  ]
+}

@@ -3,13 +3,17 @@ productName: TingFeng Hermes
 copyright: Copyright © Tingfeng (lza6)
 directories:
   output: dist
-  build: .
 # 入口
 files:
   - main.js
   - preload.js
   - runtime-controller.js
+  - log-store.js
+  - crash-diagnostics.js
+  - cua-service.js
   - package.json
+# 打包 node_modules(含 electron-updater,生产必需)
+  - node_modules/**/*
 # 不打包开发依赖(避免把 electron-builder 自身塞进安装包)
 extraFiles:
   - filter:

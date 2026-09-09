@@ -79,7 +79,6 @@ def _try_build_frontend() -> None:
     需 node/npm 在 PATH。失败只告警不阻断(API 仍可用,前端 404 可后续手动构建)。
     """
     import shutil
-    import subprocess
 
     npm = shutil.which("npm")
     if npm is None:

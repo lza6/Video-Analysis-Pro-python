@@ -12,11 +12,19 @@
 两者都只读 import，不改。
 
 工具调用解析：LLM 输出的 tool_calls 走 ToolRegistry.execute（四层 waterfall）。
+
+**分层记忆（v10.2 P1-1）**：`AgentConfig.memory` 挂 MemoryLayeredConnector。
+开启时：
+  - run_turn 开始：WorkingMemory 热层注入为附加 system 段（derive_messages 之后）
+  - run_turn 结束（TURN_END 前）：Experience 记录 + 热层同步 + 三元组抽取
+feature flag `VAP_MEMORY_LAYERED`（默认 1=开）由主控装配时读取
+（MemoryLayeredConnector.from_env）。关时 connector 为 None，行为零回归。
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from dataclasses import dataclass
@@ -25,8 +33,12 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Protocol
 
 from src.core.agent.prompt_guard import guard_messages
 from src.core.agent.session import Session, SessionEvent, SessionStore
+from src.core.agent.supervisor import RoundSignature, Supervisor
 from src.core.agent.turn import Turn, TurnHooks, TurnPhase, TurnResult, TurnStopReason
+from src.core.memory.connector import MemoryLayeredConnector
 from src.core.tools.registry import ToolCall, ToolRegistry, ToolResult
+
+log = logging.getLogger("core.agent.loop")
 
 
 class AgentPhase(str, Enum):
@@ -39,12 +51,24 @@ class AgentPhase(str, Enum):
 
 @dataclass
 class AgentConfig:
-    """ReactLoopAgent 配置。"""
+    """ReactLoopAgent 配置。
+
+    Attributes:
+        system_prompt: 系统提示词（Session 无 system 事件时可选注入）。
+        max_steps: ReAct 循环步数上限（防失控）。
+        step_timeout_sec: 单步超时（None=不超时）。
+        auto_tool_filter: 工具白名单（None=全部工具可用）。
+        supervisor: 监督层（卡死/压缩/预算）。None=禁用（feature flag
+            `VAP_AGENT_SUPERVISOR` 默认关，行为零回归）。由主控装配时注入，
+            见 `Supervisor.from_env()`。
+    """
 
     system_prompt: str = "You are a helpful assistant."
     max_steps: int = 8  # ReAct 循环步数上限（防失控）
     step_timeout_sec: Optional[float] = None
-    auto_tool_filter: Optional[List[str]] = None  # None = 全部工具可用
+    auto_tool_filter: Optional[list[str]] = None  # None = 全部工具可用
+    supervisor: Optional[Supervisor] = None  # 监督层（默认 None=禁用，零回归）
+    memory: Optional[MemoryLayeredConnector] = None  # 分层记忆（默认 None=禁用，零回归）
 
 
 class LLMClient(Protocol):
@@ -122,8 +146,23 @@ class ReactLoopAgent:
         return self._phase
 
     @staticmethod
+    def _summarize(messages: list[dict[str, Any]], budget: int = 400) -> str:
+        """把一轮 LLM 请求的消息列表压缩成审计字符串（预算截断）。"""
+        text = json.dumps(messages, ensure_ascii=False)
+        lines = text.split("\\n")
+        out: list[str] = []
+        total = 0
+        for ln in lines:
+            total += len(ln)
+            if total > budget:
+                out.append("[...truncated]")
+                break
+            out.append(ln)
+        return "\\n".join(out)
+
+    @staticmethod
     def load_session(store: SessionStore, session_id: str,
-                     system_prompt: Optional[str] = None) -> Session:
+                     system_prompt: str | None = None) -> Session:
         """从 SessionStore 恢复 Session；不存在则建空 Session。
 
         崩溃恢复入口：进程重启后，调用方传 session_id + store，
@@ -161,11 +200,32 @@ class ReactLoopAgent:
 
         self._phase = AgentPhase.RUNNING
         result = TurnResult()
+        sup = self.config.supervisor
 
         try:
+            # 预算守卫：新 turn 开始前重置 per-turn 计数
+            if sup is not None and sup.budget is not None:
+                sup.budget.begin_turn()
+
             while turn.step < self.config.max_steps and not turn.cancelled:
                 turn.step += 1
                 result.steps = turn.step
+                # 每轮重置卡死检测样本（供本轮 tool 结果收集后构造签名）
+                round_actions = []
+                round_observations = []
+                round_has_error = False
+
+                # 每轮开始前：上下文压缩检查（在 ASSEMBLE 之前）
+                if sup is not None and sup.compressor is not None:
+                    cond = sup.compressor.compress(session)
+                    if cond is not None:
+                        # 压缩摘要已作为新 system 事件 append 进 session（审计），
+                        # 本轮 derive_messages 会自然包含它。
+                        log.info(
+                            "supervisor: context compressed, "
+                            "dropped %d events -> summary(%s)",
+                            cond.dropped_events,
+                            cond.summary[:80])
 
                 # assemble prompt + tool schemas
                 await turn.emit(TurnPhase.ASSEMBLE)
@@ -177,6 +237,10 @@ class ReactLoopAgent:
                 # 交给 LLM 前先用 guard_messages 包 <tool_output> 标签 + 命中转义,
                 # 防止工具返回污染系统指令(见 prompt_guard.py)。
                 messages = guard_messages(messages)
+                # 分层记忆:热层注入为附加 system 段(derive_messages 之后,
+                # 作为附加 system,不污染 system_prompt)。
+                if self.config.memory is not None:
+                    messages = self.config.memory.inject(messages)
                 # 可选：默认注入 system（若 session 无 system event）
                 tools = self.tools.schemas()
                 if self.config.auto_tool_filter is not None:
@@ -190,7 +254,7 @@ class ReactLoopAgent:
                     "messages": messages, "tools": tools})
 
                 assistant_text = ""
-                final_tool_calls: List[Dict[str, Any]] = []
+                final_tool_calls: list[dict[str, Any]] = []
                 try:
                     async for chunk in self.llm.stream(messages, tools):
                         if chunk.delta_text:
@@ -206,6 +270,20 @@ class ReactLoopAgent:
                     result.stop_reason = TurnStopReason.ERROR
                     result.error = "LLM stream timeout"
                     break
+
+                # 预算核算：本轮 LLM 请求 token 累计（输入+输出，估算）
+                if sup is not None and sup.budget is not None:
+                    trigger = sup.budget.account_request(
+                        messages, assistant_text)
+                    if trigger is not None:
+                        result.stop_reason = TurnStopReason.BUDGET
+                        result.error = trigger.describe
+                        await turn.emit(TurnPhase.SUPERVISE, {
+                            "kind": "budget", "trigger": trigger,
+                            "messages": self._summarize(messages),
+                            "assistant_text": assistant_text})
+                        log.warning("supervisor: %s", trigger.describe)
+                        break
 
                 # tool calls
                 if final_tool_calls:
@@ -237,8 +315,43 @@ class ReactLoopAgent:
                                 "tool_call_id": call.call_id,
                                 "content": _stringify_tool_output(tr),
                             }))
+                        # 监督层卡死检测样本收集
+                        round_actions.append(
+                            (call.name, _stable_args(call.args)))
+                        round_observations.append(
+                            _stringify_tool_output(tr))
+                        if tr.is_error():
+                            round_has_error = True
                     self._persist(session)  # 持久化整轮 ReAct 中间态（崩溃可续）
                     await turn.emit(TurnPhase.STEP_END)
+
+                    # 监督层卡死检测（放在每轮 tool 结果之后）
+                    if sup is not None and sup.stuck is not None:
+                        sig = RoundSignature(
+                            actions=tuple(round_actions),
+                            observations=tuple(round_observations),
+                            has_error=round_has_error,
+                        )
+                        trigger = sup.stuck.observe(sig)
+                        if trigger is not None:
+                            await turn.emit(TurnPhase.SUPERVISE, {
+                                "kind": "stuck", "trigger": trigger})
+                            if sup.config.on_stuck == "pause":
+                                # 暂停提示：写入事件审计后继续（不清窗口，
+                                # 下轮仍带元信息；不会无限增长，检测到头会再次命中）
+                                session.append(SessionEvent(
+                                    "turn", time.time(), {
+                                        "kind": "stuck_paused",
+                                        "detail": trigger.describe,
+                                    }))
+                                log.warning(
+                                    "supervisor(pause): %s", trigger.describe)
+                            else:
+                                result.stop_reason = TurnStopReason.STUCK
+                                result.error = trigger.describe
+                                log.warning(
+                                    "supervisor(stop): %s", trigger.describe)
+                                break
                     continue  # 进下一轮 ReAct
 
                 # 无 tool_call → 终答
@@ -256,6 +369,10 @@ class ReactLoopAgent:
                 result.final_text = "(max_steps reached)"
 
             await turn.emit(TurnPhase.TURN_STOPPING)
+            # 分层记忆:turn 结束时提取 Experience 并落库(幂等,同 session 同
+            # intent 去重)。放在 TURN_END 之前,不改变 phase 顺序语义。
+            if self.config.memory is not None:
+                self.config.memory.record(session)
             await turn.emit(TurnPhase.TURN_END)
         except asyncio.CancelledError:
             result.stop_reason = TurnStopReason.CANCELLED
@@ -278,3 +395,12 @@ def _stringify_tool_output(tr: ToolResult) -> str:
     if isinstance(out, (dict, list)):
         return json.dumps(out, ensure_ascii=False)
     return str(out) if out is not None else ""
+
+
+def _stable_args(args: dict[str, Any]) -> str:
+    """把 tool args 归一成稳定签名（dict key 顺序无关，用于卡死比较）。"""
+    try:
+        return json.dumps(args, sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return json.dumps(args, sort_keys=True, ensure_ascii=False,
+                          default=str)

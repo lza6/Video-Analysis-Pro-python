@@ -6,15 +6,20 @@
 //  4. BrowserWindow loadURL(端口)
 //  5. 系统托盘(Tray + 退出菜单)
 //  6. before-quit 杀子进程(Windows taskkill /T 防孤进程)
+//  7. 黑匣子日志 LogStore(installConsoleCapture)
+//  8. autoUpdater 检查更新(electron-updater,仅生产 + feed 配置存在才启用)
+//  9. IPC:diagnostics:collect / logs:query / logs:subscribe
 
 "use strict";
 
-const { app, BrowserWindow, Tray, Menu, shell } = require("electron");
+const { app, BrowserWindow, Tray, Menu, shell, ipcMain } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const cp = require("child_process");
 const { RuntimeController } = require("./runtime-controller");
+const { LogStore, installConsoleCapture } = require("./log-store");
+const { collectDiagnostics } = require("./crash-diagnostics");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const ICON_PATH = path.join(__dirname, "assets", "icon.png");
@@ -28,6 +33,12 @@ function mlog(msg) {
   } catch (e) { /* ignore */ }
 }
 mlog("=== main.js loaded ===");
+
+// 黑匣子内存日志(主进程控制台 + 子进程 stdout/stderr + 系统事件)
+const logStore = new LogStore({ maxEntries: 2000 });
+installConsoleCapture(logStore);
+logStore.append("main", "info", "main.js loaded, log-store ready");
+
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
 /** @type {Tray | null} */
@@ -38,6 +49,64 @@ let runtime = null;
 let currentPort = null;
 /** @type {boolean} */
 let isQuitting = false;
+
+// ---------- autoUpdater(electron-updater) ----------
+// 仅生产 && feed 配置存在才启用;否则只打日志(安全降级,不做真实更新)。
+function setupAutoUpdater() {
+  let autoUpdater = null;
+  try {
+    const isDev = !!process.env.ELECTRON_IS_DEV || !app.isPackaged;
+    const updaterPath = path.join(os.homedir(), ".tingfeng-hermes-updates", "config.json");
+    let feedConfig = null;
+    if (fs.existsSync(updaterPath)) {
+      try {
+        feedConfig = JSON.parse(fs.readFileSync(updaterPath, "utf8"));
+      } catch (_) { /* ignore */ }
+    }
+    if (!feedConfig) {
+      // 尝试从 package.json build.publish 读 feed
+      try {
+        const pkg = JSON.parse(
+          fs.readFileSync(path.join(__dirname, "package.json"), "utf8")
+        );
+        if (pkg.build && pkg.build.publish && pkg.build.publish.length > 0) {
+          feedConfig = pkg.build.publish;
+        }
+      } catch (_) { /* ignore */ }
+    }
+    if (isDev) {
+      logStore.append("updater", "info", "autoUpdater disabled (dev mode)");
+      mlog("autoUpdater disabled (dev mode)");
+      return null;
+    }
+    if (!feedConfig) {
+      logStore.append(
+        "updater",
+        "warn",
+        "autoUpdater enabled but feed not configured — 不执行更新检查"
+      );
+      mlog("autoUpdater enabled but feed not configured");
+      return null;
+    }
+    // 实际启用:动态 require(electron-updater)(避免开发态加载失败)
+    autoUpdater = require("electron-updater").autoUpdater;
+    autoUpdater.setFeedURL(feedConfig.url || feedConfig[0]?.url || feedConfig, {});
+    autoUpdater.checkForUpdatesAndNotify();
+    autoUpdater.on("error", (err) => {
+      logStore.append("updater", "error", `autoUpdater error: ${err.message}`);
+    });
+    logStore.append(
+      "updater",
+      "info",
+      `autoUpdater enabled (feed=${JSON.stringify(feedConfig).slice(0, 120)})`
+    );
+    mlog("autoUpdater enabled, checkForUpdatesAndNotify()");
+  } catch (e) {
+    logStore.append("updater", "error", `autoUpdater setup error: ${e.message}`);
+    mlog("autoUpdater setup error: " + e.message);
+  }
+  return autoUpdater;
+}
 
 // ---------- 启动前清理上次残留 ----------
 // 杀掉上次崩溃/强制关闭遗留的 electron.exe + 跑 serve.py 的 python.exe,
@@ -109,6 +178,7 @@ if (!gotLock) {
   app.on("ready", () => {
     mlog("app ready event fired");
     killStaleInstances();
+    setupAutoUpdater();
     boot();
   });
   app.on("before-quit", () => {
@@ -127,21 +197,99 @@ if (!gotLock) {
   });
 }
 
+// ---------- IPC:黑匣子日志 + 诊断导出 ----------
+function registerIpc() {
+  // 诊断导出:返回 zip Buffer(渲染层 Blob 下载)
+  ipcMain.handle("diagnostics:collect", async () => {
+    const pids = [];
+    if (runtime && runtime.child && runtime.child.pid) pids.push(runtime.child.pid);
+    pids.push(process.pid);
+    try {
+      const diag = collectDiagnostics({ pids });
+      logStore.append("main", "info", `diagnostics collected: ${diag.entries.length} entries, ${diag.zip.length} bytes`);
+      return { ok: true, buffer: diag.zip, entries: diag.entries };
+    } catch (e) {
+      logStore.append("main", "error", `diagnostics collect error: ${e.message}`);
+      return { ok: false, error: e.message };
+    }
+  });
+
+  // 日志查询:level 过滤 + 搜索 + 上限
+  ipcMain.handle("logs:query", (_e, opts) => {
+    try {
+      const q = logStore.query({
+        level: opts?.level,
+        search: opts?.search,
+        limit: opts?.limit,
+      });
+      return { ok: true, logs: q };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  // 日志订阅:new listener on store 的 append 事件(复用已有 EventEmitter)
+  ipcMain.handle("logs:subscribe", (_e) => {
+    const listener = (entry) => {
+      // 推给渲染层:由于 handle 单次返回,这里用 send 广播
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("logs:append", entry);
+      }
+    };
+    logStore.on("append", listener);
+    return { ok: true };
+  });
+}
+
 async function boot() {
   mlog("boot() called");
   runtime = new RuntimeController();
   mlog("runtime created");
+  registerIpc();
   try {
     mlog("calling runtime.start");
+    // onLog 同时写 LogStore(主进程黑匣子) + 原 process.stdout 输出
     const port = await runtime.start({
-      onLog: (l) => process.stdout.write(`[serve] ${l}`),
+      onLog: (l) => {
+        logStore.append("serve", "info", l);
+        process.stdout.write(`[serve] ${l}`);
+      },
       onReady: (p) => {
         console.log(`[runtime] ready port=${p}`);
+        logStore.append("main", "info", `runtime onReady port=${p}`);
         mlog("runtime onReady port=" + p);
       },
       onFailed: (e) => {
         console.error(`[runtime] failed: ${e.message}`);
+        logStore.append("main", "error", `runtime onFailed: ${e.message}`);
         mlog("runtime onFailed: " + e.message);
+      },
+      // 崩溃断路器观察:非主动退出 → 触发 UI 提示 + 自动重启(若未冻结)
+      onExit: (code, signal) => {
+        const frozen = runtime && runtime._breaking;
+        logStore.append(
+          "main",
+          "error",
+          `serve.py 子进程退出 exit=${code} signal=${signal} frozen=${!!frozen}`
+        );
+        mlog(`serve.py exit code=${code} signal=${signal} frozen=${!!frozen}`);
+        if (frozen) {
+          // 冻结:等 re-arm。给用户可手动重启入口(tray)。
+          if (tray) {
+            const menu = Menu.buildFromTemplate([
+              { label: "显示主窗口", click: () => mainWindow && mainWindow.show() },
+              { label: `后端状态: 已冻结(5min 后自动恢复)`, enabled: false },
+              { label: "立即重启后端", click: () => { void runtime.restart(); } },
+              { label: "退出", click: () => { isQuitting = true; app.quit(); } },
+            ]);
+            tray.setContextMenu(menu);
+          }
+        } else {
+          // 非冻结:自动重启(限 1 次/次崩溃,由 onExit 触发 main.js 控制)
+          // 这里只记录,实际重启在 main.js 层做(避免多路重启)
+          if (runtime && runtime.state === "restarting") return;
+          scheduleAutoRestart();
+        }
       },
     });
     currentPort = port;
@@ -154,9 +302,41 @@ async function boot() {
     mlog("boot FAILED: " + (e.message || String(e)) + " | stack: " + (e.stack || ""));
     // 后端起不来也要开个窗口给用户看错误(避免黑屏)
     console.error(`[runtime] 启动失败: ${e.message}`);
+    logStore.append("main", "error", `boot failed: ${e.message}`);
     createTray();
     createErrorWindow(e.message || String(e));
   }
+}
+
+// 自动重启调度(断路器未冻结时)。限 1 次(每次崩溃后单发)。
+let autoRestartTimer = null;
+function scheduleAutoRestart() {
+  if (autoRestartTimer) return;
+  logStore.append("main", "warn", "serve.py 崩溃,2s 后自动重启");
+  mlog("scheduleAutoRestart 2s");
+  autoRestartTimer = setTimeout(() => {
+    autoRestartTimer = null;
+    if (isQuitting) return;
+    if (!runtime || runtime._breaking) {
+      logStore.append("main", "warn", "autoRestart skipped (breaker frozen or stopped)");
+      return;
+    }
+    logStore.append("main", "info", "auto restarting runtime...");
+    mlog("auto restarting runtime");
+    void runtime.restart({}).then((port) => {
+      currentPort = port;
+      mlog("auto restart ok port=" + port);
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        createWindow(port);
+      } else {
+        mainWindow.loadURL(`http://127.0.0.1:${port}/`).catch((e) => {
+          logStore.append("main", "error", `loadURL after restart failed: ${e.message}`);
+        });
+      }
+    }).catch((e) => {
+      logStore.append("main", "error", `auto restart failed: ${e.message}`);
+    });
+  }, 2000);
 }
 
 function createWindow(port) {
@@ -176,9 +356,21 @@ function createWindow(port) {
   });
 
   const url = `http://127.0.0.1:${port}/`;
-  mainWindow.loadURL(url).catch((e) => {
-    console.error(`[window] loadURL 失败: ${e.message}`);
-  });
+  // loadURL 失败重试 5 次,指数退避
+  let loadAttempts = 0;
+  const loadWithRetry = () => {
+    mainWindow.loadURL(url).catch((e) => {
+      loadAttempts += 1;
+      logStore.append("main", "error", `loadURL 失败 (attempt ${loadAttempts}): ${e.message}`);
+      mlog(`loadURL fail attempt ${loadAttempts}: ${e.message}`);
+      if (loadAttempts < 5) {
+        setTimeout(loadWithRetry, 1000 * loadAttempts); // 1s/2s/3s/4s
+      } else {
+        createErrorWindow(`loadURL 重试 5 次仍失败: ${e.message}`);
+      }
+    });
+  };
+  loadWithRetry();
 
   // 外部链接用系统浏览器打开,不在应用内导航走丢
   mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
@@ -199,6 +391,14 @@ function createWindow(port) {
 
   mainWindow.on("closed", () => {
     mainWindow = null;
+  });
+
+  // 渲染进程崩溃记录到黑匣子
+  mainWindow.webContents.on("render-process-gone", (_e, details) => {
+    logStore.append("renderer", "error", `renderer gone: ${JSON.stringify(details)}`);
+  });
+  app.on("crash", (_e, _killed) => {
+    logStore.append("system", "error", "app crash event fired");
   });
 }
 
@@ -250,6 +450,13 @@ function createTray() {
     },
     { type: "separator" },
     {
+      label: "导出诊断包",
+      click: () => {
+        void exportDiagnostics();
+      },
+    },
+    { type: "separator" },
+    {
       label: "退出",
       click: () => {
         isQuitting = true;
@@ -268,9 +475,31 @@ function createTray() {
   });
 }
 
+// 导出诊断包到磁盘(托盘入口)。IPC 版本返回 Buffer 给前端下载。
+function exportDiagnostics() {
+  const pids = [];
+  if (runtime && runtime.child && runtime.child.pid) pids.push(runtime.child.pid);
+  pids.push(process.pid);
+  try {
+    const diag = collectDiagnostics({ pids });
+    const outPath = path.join(PROJECT_ROOT, "logs", `diagnostics-${Date.now()}.zip`);
+    fs.writeFileSync(outPath, diag.zip);
+    logStore.append("main", "info", `diagnostics exported to ${outPath} (${diag.zip.length} bytes)`);
+    mlog(`diagnostics exported to ${outPath}`);
+    if (tray) {
+      tray.displayBalloon("诊断包已导出", outPath);
+    }
+    return outPath;
+  } catch (e) {
+    logStore.append("main", "error", `export diagnostics failed: ${e.message}`);
+    mlog("export diagnostics failed: " + e.message);
+    return null;
+  }
+}
+
 function cleanupAndQuit() {
   if (runtime) {
-    runtime.kill();
+    runtime.stop();
     runtime = null;
   }
 }

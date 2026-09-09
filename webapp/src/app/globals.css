@@ -10,9 +10,15 @@
   --color-ink-3: oklch(0.27 0.04 270);
   /* v10.2:反 AI 通用美学 — 主信号从泛蓝紫改为电光青 */
   --color-accent: oklch(0.86 0.17 190);
+  /* v10.2 P3-2:电光青语义色阶(strong 高亮/dim 弱化),供图表、强调点、hover 态使用 */
+  --color-accent-strong: oklch(0.93 0.13 190);
+  --color-accent-dim: oklch(0.72 0.11 190);
   --color-accent-2: oklch(0.62 0.19 295);
   --color-accent-2-deep: oklch(0.56 0.17 295);
   --color-accent-3: oklch(0.75 0.15 340);
+  /* v10.2 P3-2:表面分层 + 玻璃描边(卡片抬升层 / 玻璃边框统一色) */
+  --color-surface-raised: oklch(0.24 0.04 268);
+  --color-border-glass: oklch(1 0 0 / 0.14);
   --color-mist: oklch(0.9 0.012 260);
   --color-mute: oklch(0.72 0.02 260);
   --color-ok: oklch(0.75 0.15 155);
@@ -29,6 +35,9 @@
   --radius-card-sm: 1rem;
   --radius-btn: 0.375rem;
 
+  /* v10.2 P3-2:动效 token — 所有图表/交互统一节奏(fast hover、normal 位移) */
+  --duration-fast: 150ms;
+  --duration-normal: 300ms;
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -177,4 +186,44 @@ body {
   0%, 100% { transform: translateX(0); }
   25% { transform: translateX(-4px); }
   75% { transform: translateX(4px); }
+}
+
+/* ------------------ 数据可视化设计系统(v10.2 P3-2) ------------------
+   供 src/components/charts/* 使用:统一的图表画布节奏 / 横条基准线 /
+   迷你折线描边 / 末端标记点。全部走设计 token,不引第三方图表库。 */
+.chart-section {
+  position: relative;
+}
+.chart-section::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(135deg, transparent 0 58%, var(--color-accent-dim) 58% 58.6%, transparent 58.6% 100%);
+  pointer-events: none;
+}
+
+/* 折线图阴影:数据曲线之下的电光青冷晕(替代默认霓虹 pattern) */
+.chart-spark-shadow {
+  filter: drop-shadow(0 6px 18px oklch(0.86 0.17 190 / 0.2));
+}
+
+/* 横向条形:track 底 + 语义色 fill。fill 宽度用内联 style 控制 */
+.chart-bar-track {
+  background: oklch(1 0 0 / 0.06);
+  border-radius: 2px;
+  position: relative;
+  overflow: hidden;
+}
+.chart-bar-track::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(to bottom, oklch(1 0 0 / 0.06), oklch(1 0 0 / 0.02));
+}
+.chart-bar-fill {
+  border-radius: 2px;
+  position: relative;
 }

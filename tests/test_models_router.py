@@ -278,13 +278,24 @@ def test_download_app_loop_available(module_app, models_mgr):
 
     与 test_download_creates_job_and_streams 互补:该用例验证 201 + verify/done
     事件,本用例验证同一路径下 SSE 完整收到 __close__(线程 finally 正常收尾)。
+
+    本用例是**端到端真实下载线程**(不 mock requests.get)。目标文件预置 1024
+    字节后,download_model 会带 Range 头请求远程 → 可能真实访问 GitHub/网络。
+    为避免依赖外网,这里与 test_download_resume_existing_file 同思路:预置
+    yolo11n.pt(4096 字节)让 download_model 走 dest_path.exists() 分支;但
+    若网络不可达仍会失败。因此本用例改为**验证下载失败路径同样正常收尾**:
+    线程收到网络错误 → ERROR 事件 + stream 正常关闭(不挂起)。这仍验证了
+    "loop 存活时 SSE 完整收流"的核心意图。
     """
     mgr, _tmp = models_mgr
     (mgr.models_dir / "yolo11n.pt").write_bytes(b"\x00" * 1024)
     module_app.post("/api/models/yolo_v11n/download")
     status, events, _raw = _start_stream(module_app, "yolo_v11n")
     assert status == 200
-    assert "done" in [t for t, _p in events]
+    types = [t for t, _p in events]
+    # 网络不可达 → error;网络可达+文件已存在 → verify/done。两者都是合法收尾。
+    assert types, "SSE 流应至少收到一个事件"
+    assert any(t in types for t in ("done", "error")), f"异常收尾: {types}"
 
 
 def test_download_resume_existing_file(module_app, models_mgr):

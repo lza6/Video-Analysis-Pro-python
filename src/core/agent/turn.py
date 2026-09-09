@@ -14,6 +14,7 @@ phase 顺序（简化版）：
   → tool/call*
   → tools/pre-execute → execute → post-execute → tool/result*
   → step/end
+  → supervise (监督层：卡死检测/上下文压缩/预算核算，见 supervisor.py)
   → turn-stopping
   → turn/end
 
@@ -42,6 +43,7 @@ class TurnPhase(str, Enum):
     TOOL_POST_EXECUTE = "tools/post-execute"
     TOOL_RESULT = "tool/result"
     STEP_END = "step/end"
+    SUPERVISE = "supervise"
     TURN_STOPPING = "turn-stopping"
     TURN_END = "turn/end"
 
@@ -53,6 +55,8 @@ class TurnStopReason(str, Enum):
     MAX_STEPS = "max_steps"  # 步数上限
     ERROR = "error"
     CANCELLED = "cancelled"
+    STUCK = "stuck"  # 监督层卡死检测命中（同 action/observation 或同 tool_args 或 error 循环）
+    BUDGET = "budget"  # 监督层成本预算超限（per-turn token 上限或累计预算）
 
 
 @dataclass

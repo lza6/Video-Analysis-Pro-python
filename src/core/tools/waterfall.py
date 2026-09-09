@@ -42,10 +42,16 @@ class Deny(_Signal):
 
 @dataclass(frozen=True)
 class Ask(_Signal):
-    """请求人工审批，附带 prompt 给人看。"""
+    """请求人工审批，附带 prompt 给人看。
+
+    v10.2:追加 `priority` 字段(读操作 allow / 写操作 ask / 危险写 ask),
+    scope_guard 用它把分级信息带给 approval handler。默认 "write" 保持
+    既有语义(向前兼容,零回归)。
+    """
 
     prompt: str = ""
     default: str = "deny"
+    priority: str = "write"
 
 
 @dataclass(frozen=True)
