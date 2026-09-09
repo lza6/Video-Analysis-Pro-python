@@ -3,7 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 /**
  * Playwright E2E 配置(冒烟层)。
  *
- * 前置:后端(FastAPI + 前端静态导出)已跑在 http://127.0.0.1:8001。
+ * 前置:后端(FastAPI + 前端静态导出)已跑在 http://127.0.0.1:8002。
  * 本配置**不启动服务**(不配 webServer),假设外部已就绪 —— 避免与开发实例
  * (默认 :8000)端口冲突,也避免在 CI 里重建前端产物的耗时。
  *
@@ -22,7 +22,7 @@ export default defineConfig({
     : "list",
 
   use: {
-    baseURL: "http://127.0.0.1:8001",
+    baseURL: "http://127.0.0.1:8002",
     browserName: "chromium",
     trace: "on-first-retry",
     screenshot: "only-on-failure",

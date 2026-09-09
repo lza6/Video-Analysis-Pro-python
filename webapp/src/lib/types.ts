@@ -216,6 +216,16 @@ export interface AgentRunStreamDoneEvent {
   reason?: string;
 }
 
+/** SSE 事件: /api/agent/run_stream 审批推送(react 路径写工具 Ask 时触发)。 */
+export interface AgentApprovalRequest {
+  pin: string;
+  tool: string;
+  args: Record<string, unknown>;
+  reason: string;
+  priority: string;
+  timeout: number;
+}
+
 // ============================ requests / providers (F7) ============================
 
 /** 单条 LLM 请求日志(与 src/core/request_log.py RequestLog + list_logs 返回对齐)。 */

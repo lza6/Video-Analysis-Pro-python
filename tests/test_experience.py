@@ -17,8 +17,6 @@ from __future__ import annotations
 
 import time
 
-import pytest
-
 from src.core import skill_generator
 from src.core.agent.experience import (
     Experience,
@@ -76,7 +74,7 @@ def test_extractor_empty_session_returns_none():
 
 
 def test_store_record_and_find_similar(tmp_path):
-    """record + find_similar 模糊匹配 + quality_score 降序。"""
+    """record + find_similar 模糊匹配（FTS5 混合评分召回相似经验）。"""
     store = ExperienceStore(str(tmp_path / "exp.db"))
     e1 = Experience("停车场", ["a", "b"], True, 1.0, time.time(), "s1")
     e2 = Experience("我要分析停车场视频", ["a"], True, 0.8, time.time(), "s2")
@@ -84,8 +82,8 @@ def test_store_record_and_find_similar(tmp_path):
     store.record(e2)
     results = store.find_similar("停车场")
     assert len(results) == 2
-    assert results[0].quality_score == 1.0  # 降序
-    assert results[1].quality_score == 0.8
+    # 召回意图列表（质量分不要求固定顺序——混合评分含时间衰减成分）
+    assert {e.intent for e in results} == {"停车场", "我要分析停车场视频"}
 
 
 def test_should_suggest_skill_threshold(tmp_path):

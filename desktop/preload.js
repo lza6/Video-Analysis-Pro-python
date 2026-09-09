@@ -2,7 +2,7 @@
 // contextBridge 暴露最小 API 给渲染层(主窗口 webapp)。当前 webapp 不依赖这些
 // API 也能跑(它直接打 FastAPI),这里只暴露元信息供 About 页/调试展示。
 
-const { contextBridge } = require("electron");
+const { contextBridge, ipcRenderer } = require("electron");
 const path = require("path");
 const fs = require("fs");
 
@@ -21,5 +21,11 @@ try {
 contextBridge.exposeInMainWorld("vapDesktop", {
   getAppVersion: () => version,
   platform: process.platform,
-  // 占位:后续若需"重启后端/打开日志目录"等能力,在此暴露 IPC 句柄
+  // 黑匣子日志 + 诊断导出(Builder P1-3:logs 页黑匣子实时面板 + 导出诊断包)
+  logsQuery: (opts) => ipcRenderer.invoke("logs:query", opts),
+  logsSubscribe: () => ipcRenderer.invoke("logs:subscribe"),
+  onLogsAppend: (cb) => {
+    ipcRenderer.on("logs:append", (_e, entry) => cb(entry));
+  },
+  collectDiagnostics: () => ipcRenderer.invoke("diagnostics:collect"),
 });

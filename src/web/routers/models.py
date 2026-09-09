@@ -98,16 +98,17 @@ def start_download(model_id: str, request: Request) -> dict:  # type: ignore[no-
 
 
 @router.get("/{model_id}/download/stream", dependencies=[Depends(require_auth)])
-async def download_stream(model_id: str, request):
+async def download_stream(model_id: str, request: Request):
     """SSE 下载进度。"""
     from ..deps import get_job_store
     store = get_job_store()
     job_id_prefix = f"dl_{model_id}_"
+    # 取该模型**最新创建**的下载 job(dict 末尾插入 = 最新)。
+    # 多次 POST 同一模型会留下多个 job,若绑定最旧的前端订阅会死等旧线程事件。
     rec = None
     for jid, r in store._jobs.items():  # type: ignore[attr-defined]
         if jid.startswith(job_id_prefix):
-            rec = r
-            break
+            rec = r  # 不 break:迭代到最后一个即最新
     if rec is None:
         raise HTTPException(status_code=404, detail={"error": "no active download"})
 
@@ -192,6 +193,10 @@ def _launch_download(model_id: str, rec, loop: asyncio.AbstractEventLoop) -> Non
         finally:
             rec.status = JobStatus.DONE if rec.status == JobStatus.RUNNING else rec.status
             rec.finished_at = time.time()
+            # 先置 stream_closed 再推 __close__:stream_job_events 在收到
+            # __close__ 前会先检查 stream_closed,顺序保证 live 排空即收尾,
+            # 不会多等 15s 心跳(analyzer_service.on_done 同模式)。
+            rec.stream_closed = True
             push(SSEEvent._CLOSE, {})
 
     threading.Thread(target=run, daemon=True, name=f"dl-{model_id}").start()

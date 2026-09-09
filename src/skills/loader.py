@@ -19,6 +19,17 @@ from src.skills.schema import MAX_DESCRIPTION_LEN, Skill
 from src.skills.state import get_enabled_state
 from src.utils.constants import CONFIG_DIR
 
+try:
+    from src.skills.spectre import scan_skill
+except Exception:  # noqa: BLE001 - 安全扫描不可用时降级无警告（保持 loader 可用）
+    scan_skill = None
+
+# 默认自动化规则：危险项命中时默认不自动 enabled（仍可手动开，加 warning）。
+# `.env` 可配置 VAP_SKILLS_AUTODISTILL：1=开（默认），0=关零回归。
+import os
+_DEFAULT_AUTODISTILL = os.environ.get("VAP_SKILLS_AUTODISTILL", "1").strip().lower()
+AUTODISTILL_ENABLED = _DEFAULT_AUTODISTILL in ("1", "true", "yes", "on")
+
 logger = logging.getLogger(__name__)
 
 SKILLS_DIR_NAME = "skills"
@@ -80,8 +91,15 @@ def _normalize_triggers(raw: Any) -> tuple[str, ...]:
     return ()
 
 
-def _build_skill(skill_dir: Path, fm: dict[str, Any], md_path: Path, enabled: bool) -> Skill | None:
-    """根据 frontmatter dict 构建 Skill。失败返回 None。"""
+def _build_skill(skill_dir: Path, fm: dict[str, Any], md_path: Path,
+                 enabled: bool) -> Skill | None:
+    """根据 frontmatter dict 构建 Skill。失败返回 None。
+
+    构建时对每个 skill 跑 spectre.scan_skill（安全前端）：
+    - 命中危险项（medium 及以上 finding）→ security_warning=True，且
+      默认不自动 enabled（可手动开启，加 warning）。
+    - 现有 8 个内置 skill 扫描全 clean → 行为与旧版完全一致（零回归）。
+    """
     name = str(fm.get("name", "")).strip()
     description = str(fm.get("description", "")).strip()
 
@@ -104,6 +122,22 @@ def _build_skill(skill_dir: Path, fm: dict[str, Any], md_path: Path, enabled: bo
         )
         return None
 
+    # 安全前端：spectre 扫描（VAP_SKILLS_AUTODISTILL=0 时完全关闭，零回归）
+    security_warning = False
+    if AUTODISTILL_ENABLED and scan_skill is not None and md_path.name == SKILL_FILENAME:
+        try:
+            report = scan_skill(skill_dir)
+            if not report.clean:
+                security_warning = True
+                codes = sorted({f.code for f in report.findings})
+                logger.warning(
+                    "skill %s 扫描发现 %d 项风险（%s）：默认不自动启用，可手动开启",
+                    name, len(report.findings), ",".join(codes[:6]),
+                )
+        except Exception:  # noqa: BLE001 - 扫描异常不应阻断加载
+            logger.warning("skill %s 安全扫描失败，跳过", name, exc_info=True)
+            security_warning = False
+
     triggers = _normalize_triggers(fm.get("triggers"))
     try:
         return Skill(
@@ -111,7 +145,8 @@ def _build_skill(skill_dir: Path, fm: dict[str, Any], md_path: Path, enabled: bo
             description=description,
             triggers=triggers,
             path=md_path,
-            enabled=enabled,
+            enabled=enabled and not security_warning,
+            security_warning=security_warning,
         )
     except ValueError as exc:
         logger.warning("跳过 %s：Skill 构建失败 %s", md_path, exc)

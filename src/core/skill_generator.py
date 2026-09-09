@@ -142,11 +142,15 @@ def save_skill(draft: SkillDraft, skills_dir: Path,
 
 
 def generate_skill(text: str, skills_dir: Path,
-                   overwrite: bool = False) -> Optional[dict]:
+                   overwrite: bool = False,
+                   return_draft: bool = False) -> Optional[dict]:
     """端到端：文本 → 场景识别 → 草稿 → 存盘。返回结果 dict 或 None。
 
     不真实调付费 LLM（红线）：用规则模板生成。用户给预算后可扩展
     draft_skill_from_scene 调 LLM 补全 algorithm/parameters。
+
+    return_draft=True 时结果 dict 额外带 ``draft``（SkillDraft），
+    供 distiller 复用（同一 draft 对象可直接走 render_skill_md）。
     """
     scene = detect_scene(text)
     if scene is None:
@@ -157,12 +161,14 @@ def generate_skill(text: str, skills_dir: Path,
         return None
     try:
         md_path = save_skill(draft, skills_dir, overwrite=overwrite)
-        return {
+        result: dict = {
             "ok": True,
             "scene": scene,
             "skill_name": draft.name,
             "path": str(md_path),
-            "draft": draft,
         }
+        if return_draft:
+            result["draft"] = draft
+        return result
     except FileExistsError as e:
         return {"ok": False, "error": str(e), "skill_name": draft.name}

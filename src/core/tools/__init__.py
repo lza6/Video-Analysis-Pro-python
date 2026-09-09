@@ -35,6 +35,7 @@ from src.core.tools.registry import (
 from src.core.tools.adapter import (
     adapt_legacy_tool,
     register_legacy_tools,
+    register_media_gen_tools,
     LEGACY_TOOL_SPECS,
 )
 
@@ -59,5 +60,6 @@ __all__ = [
     "ToolNotFound",
     "adapt_legacy_tool",
     "register_legacy_tools",
+    "register_media_gen_tools",
     "LEGACY_TOOL_SPECS",
 ]

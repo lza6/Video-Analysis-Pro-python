@@ -51,15 +51,50 @@ def _hold_port(port: int | None = None) -> tuple[socket.socket, int]:
 
     Windows 上 SO_REUSEADDR 允许多 socket 绑同端口,SO_EXCLUSIVEADDRUSE 才能
     真正独占。serve._port_available 用 SO_REUSEADDR 探测,被占端口应返回 False。
-    返回 (socket, port),调用方负责 close。
+
+    全量合跑时进程内大量 socket 开合会占用大量动态端口。bind(0) 让 OS 从动态
+    端口池(Windows 默认 49152-65535)分配;若动态池被占满,bind(0) 会不断返回
+    已占用端口,导致本函数重试耗尽。因此:
+      1. 优先用 bind(0) 拿 OS 分配端口 + EXCLUSIVEADDRUSE 持有 + 反向探测;
+      2. 反向探测确认 _port_available 返回 False,否则换端口重试;
+      3. 动态池满时(bind(0) 返回已占用端口),改用低位段 1024-9000 搜索可用
+         端口兜底(该段与动态池不重叠,几乎不可能被占满)。
+    显式指定端口时不换号(bind 失败/探测失败都抛异常)。
     """
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
-        # Windows 独占语义:阻止其它 socket(含 SO_REUSEADDR) 再 bind
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-    s.bind(("127.0.0.1", port if port is not None else 0))
-    s.listen(1)
-    return s, s.getsockname()[1]
+    from src.web.serve import _port_available
+
+    def _try_hold(p: int) -> socket.socket | None:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        try:
+            s.bind(("127.0.0.1", p))
+            s.listen(1)
+        except OSError:
+            s.close()
+            return None
+        if _port_available("127.0.0.1", p):
+            s.close()
+            return None
+        return s
+
+    if port is not None:
+        s = _try_hold(port)
+        if s is None:
+            raise RuntimeError(f"端口 {port} 无法可靠独占(可能被占或 TIME_WAIT 复用)")
+        return s, port
+
+    # 动态池优先
+    for _ in range(20):
+        s = _try_hold(0)
+        if s is not None:
+            return s, s.getsockname()[1]
+    # 动态池满 → 低位段兜底(1024-9000)
+    for p in range(1024, 9000):
+        s = _try_hold(p)
+        if s is not None:
+            return s, p
+    raise RuntimeError("无法找到可可靠独占的端口(动态池与低位段均不可用)")
 
 
 def _stub_uvicorn(calls: list) -> None:

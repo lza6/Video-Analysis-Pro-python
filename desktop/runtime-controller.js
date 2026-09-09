@@ -9,6 +9,8 @@
 const { spawn } = require("child_process");
 const path = require("path");
 const http = require("http");
+const { EventEmitter } = require("events");
+const { LogStore } = require("./log-store");
 
 // serve.py stdout 中的就绪信号:
 //   "TingFeng Hermes Web UI: http://127.0.0.1:<port>"
@@ -17,6 +19,13 @@ const READY_RE = /http:\/\/127\.0\.0\.1:(\d+)/;
 const FAIL_RE = /端口\s*\d+\s*-\s*\d+\s*全被占用|无法启动/;
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
+
+// 崩溃断路器默认参数:最多 5 次 / 60s 窗口内非预期退出 → 冻结重启 5min
+const DEFAULT_BREAKER = {
+  maxCrashesInWindow: 5,
+  windowMs: 60_000,
+  freezeMs: 5 * 60_000, // 5min auto re-arm
+};
 
 /**
  * 定位 venv python 可执行文件。找不到则回退系统 python/python3。
@@ -67,8 +76,9 @@ function waitForHealth(port, timeoutMs = 60000) {
   });
 }
 
-class RuntimeController {
-  constructor() {
+class RuntimeController extends EventEmitter {
+  constructor(opts = {}) {
+    super();
     /** @type {import("child_process").ChildProcess | null} */
     this.child = null;
     /** @type {number|null} */
@@ -79,17 +89,78 @@ class RuntimeController {
     this.onReady = () => {};
     /** @type {(err: Error) => void} */
     this.onFailed = () => {};
+
+    // ---------- 状态机 ----------
+    // starting / ready / crashed / stopping / restarting
+    this.state = "starting";
+    this._breaking = false; // 断路器是否冻结
+    this._crashTimes = []; // 60s 窗口内非预期退出时间戳
+    this._breaker = { ...DEFAULT_BREAKER, ...(opts.breaker || {}) };
+    this._rearmTimer = null;
+    this._restartTimer = null;
+  }
+
+  /** 当前运行状态(只读)。 */
+  getState() {
+    return this.state;
+  }
+
+  /**
+   * 更新状态 + 广播。附带状态元信息(诊断用)。
+   * @param {string} next
+   * @param {object} [meta]
+   */
+  _setState(next, meta = {}) {
+    const prev = this.state;
+    this.state = next;
+    this.emit("state", { prev, next, ts: Date.now(), ...meta });
+    this._log(`state ${prev} → ${next}`);
+  }
+
+  /**
+   * 崩溃断路器:子进程非预期退出时调用。
+   * 超过 maxCrashesInWindow 次 / windowMs → 冻结重启(5min auto re-arm)。
+   * @returns {boolean} true=已冻结(不再自动重启)
+   */
+  _recordCrash() {
+    const now = Date.now();
+    this._crashTimes = this._crashTimes.filter((t) => now - t < this._breaker.windowMs);
+    this._crashTimes.push(now);
+    if (this._crashTimes.length > this._breaker.maxCrashesInWindow) {
+      this._setState("crashed", { breaker: "frozen", count: this._crashTimes.length });
+      this._breaking = true;
+      this._log(
+        `[breaker] 冻结重启: ${this._crashTimes.length} 次崩溃/60s 窗口,auto re-arm ${this._breaker.freezeMs}ms`
+      );
+      clearTimeout(this._rearmTimer);
+      this._rearmTimer = setTimeout(() => {
+        this._breaking = false;
+        this._crashTimes = [];
+        this._log("[breaker] auto re-arm: 恢复自动重启");
+        this.emit("breaker-rearmed");
+        this._setState("starting", { note: "breaker-rearmed" });
+      }, this._breaker.freezeMs);
+      return true;
+    }
+    return false;
+  }
+
+  /** 是否有未完成的 rearm / 重启定时器(诊断用)。 */
+  _pendingTimers() {
+    return { restart: !!this._restartTimer, rearm: !!this._rearmTimer };
   }
 
   /**
    * 启动 python serve.py 子进程,探测端口。
-   * @param {{onLog?: (l: string) => void, onReady?: (p: number) => void, onFailed?: (e: Error) => void}} [opts]
+   * @param {{onLog?: (l: string) => void, onReady?: (p: number) => void, onFailed?: (e: Error) => void, onExit?: (code: number|null, signal: NodeJS.Signals|null) => void}} [opts]
    * @returns {Promise<number>} 实际端口
    */
   async start(opts = {}) {
     this.onLog = opts.onLog || (() => {});
     this.onReady = opts.onReady || (() => {});
     this.onFailed = opts.onFailed || (() => {});
+    this.onExit = opts.onExit || (() => {});
+    this._setState("starting");
 
     const exe = resolvePythonExe();
     // 用 `python -m src.web.serve` 而非 `python src/web/serve.py`:
@@ -124,6 +195,7 @@ class RuntimeController {
       if (settled) return;
       settled = true;
       this.port = port;
+      this._setState("ready", { port });
       this._log(`settleReady port=${port}`);
       this.onReady(port);
       if (resolveReady) resolveReady(port);
@@ -132,6 +204,7 @@ class RuntimeController {
     const settleFail = (err) => {
       if (settled) return;
       settled = true;
+      this._setState("crashed", { reason: err.message });
       this._log(`settleFail: ${err.message}`);
       this.onFailed(err);
       if (rejectFail) rejectFail(err);
@@ -168,6 +241,17 @@ class RuntimeController {
           new Error(`serve.py 子进程提前退出(exit=${code} signal=${signal})`)
         );
       }
+      // ---------- 崩溃断路器 ----------
+      // 只在非"主动退出"场景计崩(stopping 状态跳过)。
+      if (this.state !== "stopping") {
+        const frozen = this._recordCrash();
+        if (!frozen) {
+          this._log(
+            `[breaker] 子进程退出 exit=${code} signal=${signal} (非主动),已记录崩溃次数=${this._crashTimes.length}`
+          );
+        }
+      }
+      this.onExit(code, signal);
     });
 
     // 兜底:5s 内 stdout 还没给端口,主动轮询默认 8000-8019
@@ -182,6 +266,9 @@ class RuntimeController {
         }
       }
     }, 5000);
+
+    // 崩溃断路器自动重启:如果冻结,不自动重启,等待 manual restart / re-arm
+    // 否则 1s 后自动重启(restart attempt 由调用方通过 onExit 观察)。
 
     // 总超时 90s
     // settleReady/settleFail 调 onReady/onFailed 后,resolve/reject Promise
@@ -202,6 +289,28 @@ class RuntimeController {
       this._log(`start() catch: ${e.message}`);
       throw e;
     });
+  }
+
+  /**
+   * 健康探活失败重试 + loadURL 失败重试退避 —— 由调用方(main.js)注入,
+   * 这里提供内部 helper 供 main.js 使用,避免重复实现。
+   * @param {number} port
+   * @param {{ attempts?: number, baseDelayMs?: number }} [opts]
+   * @returns {Promise<boolean>} 最终是否探活成功
+   */
+  async waitHealthy(port, opts = {}) {
+    const attempts = opts.attempts ?? 30;
+    const baseDelayMs = opts.baseDelayMs ?? 1000;
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        const ok = await waitForHealth(port, 2000);
+        if (ok) return true;
+      } catch (_) { /* retry */ }
+      if (i < attempts) {
+        await new Promise((r) => setTimeout(r, Math.min(baseDelayMs * i, 15000)));
+      }
+    }
+    return false;
   }
 
   /**
@@ -242,6 +351,33 @@ class RuntimeController {
       /* ignore */
     }
     this.child = null;
+  }
+
+  /**
+   * 主动停止(不触发断路器)。设置 stopping 标记,后续 exit 不计为崩溃。
+   */
+  stop() {
+    if (this.state === "stopping") return;
+    this._setState("stopping", {});
+    clearTimeout(this._restartTimer);
+    this._restartTimer = null;
+    if (this.child && this.child.exitCode === null) {
+      this.kill();
+    } else {
+      this.child = null;
+    }
+  }
+
+  /** 手动重启(解除冻结时使用)。 */
+  async restart(opts = {}) {
+    if (this._breaking) {
+      this._log("[restart] 断路器仍冻结,等待 re-arm 或手动解锁");
+      throw new Error("breaker frozen");
+    }
+    clearTimeout(this._restartTimer);
+    if (this.child && this.child.exitCode === null) this.kill();
+    this._setState("restarting", {});
+    return this.start(opts);
   }
 }
 

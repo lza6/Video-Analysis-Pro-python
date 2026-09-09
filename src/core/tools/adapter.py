@@ -240,3 +240,84 @@ def register_legacy_tools(
         defn = adapt_legacy_tool(spec, app_context_getter)
         disposers.append(registry.register(defn))
     return disposers
+
+
+def register_web_auto_tools(
+    registry,
+    *,
+    browser_provider: Optional[str] = None,
+    cdp_url: Optional[str] = None,
+    cdp_enabled: bool = True,
+    browser_enabled: bool = True,
+) -> List[Callable[[], None]]:
+    """把 P2-3 浏览器/CDP 自动化工具注册进 registry（不动既有注册）。
+
+    等价于 `src/core/tools/web_auto.register_web_auto_tools` 的 re-export，
+    方便装配方只从 adapter 拉全部工具。参数含义与 web_auto 包一致：
+
+      - browser_provider: 覆盖 VAP_WEB_AUTO_PROVIDER（None = 读 env）。
+      - cdp_url: 覆盖 VAP_CDP_URL（None = 读 env）。
+      - cdp_enabled / browser_enabled: 独立开关。
+
+    Returns:
+        disposer 列表（卸载工具 + 关闭真实连接）。
+    """
+    from src.core.tools.web_auto import register_web_auto_tools as _register
+
+    return _register(
+        registry,
+        browser_provider=browser_provider,
+        cdp_url=cdp_url,
+        cdp_enabled=cdp_enabled,
+        browser_enabled=browser_enabled,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 内容生产工具（P2-1 视频生成/剪辑 Agent 工具集）
+#
+# 独立注册函数，**不改** agent.py / loop.py 装配行——由主控在
+# install_tool_guard 之后的装配点调用本函数挂载。四工具全部本地/免费真实执行
+# 或 Mock 占位（付费红线），不真调付费 API。
+# ---------------------------------------------------------------------------
+
+
+def register_media_gen_tools(registry) -> List[Callable[[], None]]:
+    """把内容生产四工具（subtitle/clip/voiceover/shortvideo）注册到 registry。
+
+    与 `register_legacy_tools` 平行，是独立注册面：
+      - 不改既有 17 个 legacy 工具的注册行为（零回归）
+      - 返回 disposer 列表（插件卸载 / 测试隔离用）
+      - 全部为 ToolDefinition 直注册（不经 legacy factory 包装）
+
+    默认注册的剪辑工具名是 `create_cut_clip`（含 `cut` → 命中 scope_guard 的
+    CUT_WRITE_PATTERNS，落盘需审批）。如需无审批的 `smart_clip` 别名，主控可
+    用 `make_smart_clip_tool(name="smart_clip")` 显式覆盖（不推荐，见 clip.py）。
+
+    Args:
+        registry: ToolRegistry 实例。
+
+    Returns:
+        disposer 列表，逐个调用可卸载对应工具。
+    """
+    from src.core.tools.media_gen.clip import make_smart_clip_tool
+    from src.core.tools.media_gen.shortvideo import make_short_video_tool
+    from src.core.tools.media_gen.subtitle import make_subtitle_tool
+    from src.core.tools.media_gen.voiceover import make_voiceover_tool
+
+    factories = (
+        make_subtitle_tool,
+        make_smart_clip_tool,
+        make_voiceover_tool,
+        make_short_video_tool,
+    )
+    return [registry.register(f()) for f in factories]
+
+
+__all__ = [
+    "LEGACY_TOOL_SPECS",
+    "adapt_legacy_tool",
+    "register_legacy_tools",
+    "register_media_gen_tools",
+    "register_web_auto_tools",
+]

@@ -21,6 +21,7 @@ class Skill:
     triggers: tuple[str, ...]
     path: Path
     enabled: bool
+    security_warning: bool = False
 
     def __post_init__(self) -> None:
         # frozen=True 下无法直接赋值，走 object.__setattr__ 完成规范化。
@@ -37,3 +38,5 @@ class Skill:
         # path 强制 Path
         if not isinstance(self.path, Path):
             object.__setattr__(self, "path", Path(self.path))
+        # security_warning 强制 bool
+        object.__setattr__(self, "security_warning", bool(self.security_warning))

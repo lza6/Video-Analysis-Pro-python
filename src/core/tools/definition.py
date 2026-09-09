@@ -38,16 +38,25 @@ class ToolDefinition:
     output_schema: Optional[Dict[str, Any]] = None
 
     def to_llm_schema(self) -> Dict[str, Any]:
-        """投影成 LLM tool schema（OpenAI function-calling 格式子集）。"""
-        schema = dict(self.input_schema) if self.input_schema else {
+        """投影成 LLM tool schema（OpenAI function-calling 格式）。
+
+        NVIDIA integrate 的 OpenAI 兼容端点要求 tools[].type="function" +
+        tools[].function.{name,description,parameters}；缺 type 会 400
+        "missing field `type`"（实测 2026-09-07）。VAP 本地用 name/input_schema
+        简化投影，此处补齐 OpenAI 兼容包装。
+        """
+        parameters = dict(self.input_schema) if self.input_schema else {
             "type": "object",
             "properties": {},
         }
-        schema.setdefault("type", "object")
+        parameters.setdefault("type", "object")
         return {
-            "name": self.name,
-            "description": self.description,
-            "input_schema": schema,
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": parameters,
+            },
         }
 
 

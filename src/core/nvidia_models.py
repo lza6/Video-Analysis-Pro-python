@@ -350,6 +350,7 @@ def build_nvidia_payload(
     max_tokens: int = 65536,
     temperature: float = 0.2,
     stream: bool = True,
+    tools: Optional[List[Dict[str, Any]]] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """构造 NVIDIA integrate.api.nvidia.com 的 raw REST payload。
@@ -366,6 +367,7 @@ def build_nvidia_payload(
         max_tokens: 输出 token 上限
         temperature: 采样温度
         stream: 是否流式
+        tools: 可选工具 schema 列表（OpenAI 兼容 tool calling），非 None 时并入 payload 顶层
         extra: 额外顶层字段（如 top_p），会被合并进 payload 顶层
 
     Returns:
@@ -378,6 +380,10 @@ def build_nvidia_payload(
         "temperature": temperature,
         "stream": stream,
     }
+
+    if tools:
+        # OpenAI 兼容 tool calling：tools 放顶层，零回归（无 tools 时不写该键）
+        payload["tools"] = tools
 
     # 思考链相关字段：查模型是否支持思考；未知模型默认按调用者意图放（服务器兜底）
     model = get_model_by_id(model_id)

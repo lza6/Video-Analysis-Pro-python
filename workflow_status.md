@@ -1,96 +1,46 @@
-# v10.1.0 闭环补齐 — 任务状态
+# Workflow Status — v10.3 全功能闭环实施（Phase B）
 
-> 基于 5 个 explorer 子代理对真实代码的核查，对照《改进指南/下一步改进指南.md》。
-> 工作树基线：v9→v10 转型代码零提交屎山（221 条）。
-> 维护者：主控代理（Orchestrator） · 日期：2026-09-06 · 版本：10.1.0
+> 依据 `参考的结果计划指南.md`（v2，Critic PASS）落地。用户已全权授权所有阶段与行为（含提交/推送/发行版）。
+> 本文件是任务单一状态源。证据只在实际运行后标记。
 
-## 已完成（本轮闭环）
+## Task Contract
+- **原始目标**：将指南 v2 的 P0-P3 全部批次真实落地闭环，含真实 E2E、验收、审计；最后提交推送并创建发行版。
+- **当前阶段**：Phase B（实施）→ 验证 → 审查 → 复验 → 发布。
+- **当前授权**：全部（编码/测试/构建/E2E/审计/commit/push/tag/release）。
+- **成功标准**：每批有源码+测试+运行证据；全量测试绿 + 覆盖率≥80% + ruff/pyflakes 零告警 + 前端 build 绿 + Playwright E2E 绿；Critic 复验无 BLOCKER/MAJOR；版本号五同步 + CHANGELOG；推送 + release。
+- **停止条件**：无未关闭 BLOCKER/MAJOR；全部批 ✓；发布完成。
 
-### P0 收口
-- ✅ .gitignore 补 `config/runs.db-shm`/`runs.db-wal`（line 60-62）
-- ✅ README.md 升 v10.0.0（hero/tagline/简介/v10 新增能力/文档日期）
-- ✅ 旧测试去版本号：test_v59_skills_ui→test_skills_ui / test_v60_security→test_security_hardening / test_agent_prompt_v52→test_agent_prompt_sections（git mv，回归 39 passed）
-- ✅ error.tsx 上报 /api/logs（apiPostJson + 静默兜底）+ logs router 新增 POST /api/logs 端点
-- ✅ Button 加 success/error 反馈态（feedback prop + shake keyframe）
-- ✅ prompt_guard 补 HIDDEN_UNICODE（零宽 U+200B-200D/U+2060/U+FEFF）+ SYSTEM_SPOOF（system:/assistant:/developer: 伪冒）+ 6 新测试用例
+## Task Graph / Batches
+| ID | 批 | 内容 | 依赖 | 涉及文件 | 状态 |
+|----|----|------|------|----------|------|
+| B0 | 基线 | 测试基线 + git/remote 确认 | - | - | IN_PROGRESS |
+| B-P0-1 | 监督层 | supervisor.py(Stuck/Compress/Budget) + loop.py 接入 + TurnStopReason BUDGET/STUCK + test_supervisor | - | src/core/agent/{supervisor(新),loop,turn} | VERIFIED 2026-09-09（13 用例全绿 + 回归） |
+| B-P0-2 | 写审批 | scope_guard.py + registry 装配 approval/sandbox + waterfall 分级 + deps SSE 通道 + test_scope_guard | - | src/core/tools/{scope_guard(新),waterfall,registry}+src/web/routers/agent.py+deps.py | VERIFIED 2026-09-09（主体 DONE，Web 装配由主控集成） |
+| B-ASSEMBLE | 统一装配 | agent.py react 路径注入 supervisor+sandbox+approval + SSE 审批端点 + .env.example 5 变量 + test_agent_router_assembly | P0-1/P0-2/P1-3 | src/web/routers/agent.py + deps(确认) + .env.example + tests/test_agent_router_assembly(新) | VERIFIED 2026-09-09（75 passed 复跑） |
+| B-P1-1 | 记忆分层 | memory/{working(新),triplestore(新),connector(新)} + experience FTS5 混合 + loop hooks 接入 | B-P0-1 | src/core/{memory/*,agent/experience,agent/loop} | VERIFIED 2026-09-09（59 passed 复跑） |
+| B-P1-2 | skills 闭环 | skills/{distiller,validator,scoring,spectre,roster} + loader 安全前端 + test | B-P1-1 | src/skills/* | VERIFIED 2026-09-09（77 passed 复跑） |
+| B-P2-1 | 视频工具集 | media_gen/{subtitle,clip,voiceover,shortvideo} + adapter 注册(Mock 守付费红线) | B-P0-2 + B-P1-2 | src/core/tools/media_gen/* | VERIFIED 2026-09-09（23 passed 复跑） |
+| B-P2-2 | 电商/PPT/营销 skills | commerce/dashi-ppt/claude-ads skill + role_template 商务角色 | B-P1-2 + B-P0-2 | config/skills/*+src/core/subagent/role_template.py | VERIFIED 2026-09-09（52 passed 复跑） |
+| B-P2-3 | 浏览器/GUI 自动化 | tools/web_auto/{browser,cdp} + desktop CUA 服务 | B-P0-2 + B-P1-2 | src/core/tools/web_auto/* + desktop | VERIFIED 2026-09-09（16 passed+1 skip 复跑） |
+| B-P3-1 | MCP 双形态 | src/mcp/server.py + 工具白名单 | B-P2-1 | src/mcp/* | VERIFIED 2026-09-09（22 passed+stdio 冒烟复跑） |
+| B-P3-2 | 反 AI-slop | webapp 设计 token 升级 | - | webapp/src/components|globals.css | VERIFIED 2026-09-09（build+token 实测复跑） |
+| B-FIN | 收尾发布 | 全量测试+E2E+审计+Critic+版本五同步+CHANGELOG+push+release | 全部 | 全仓 | IN_PROGRESS |
 
-### P1 新模块（6 个，Wave 1 worker 并行交付，主控接入）
-- ✅ error_policy.py（ToolErrorKind + ErrorPolicy + 指数退避 + mark_unavailable）→ registry.execute 接入 `_execute_once` + 策略重试包装（policy=None 零回归）
-- ✅ structured_log.py（JSONFormatter + trace_context + install_json_logging 幂等）→ app.py lifespan 切 JSON 日志（失败回退纯文本）
-- ✅ vlm_client.py（VLMClient Protocol + Ollama/Cloud/Mock，httpx 条件依赖）+ agent_tools.create_vlm_describe_tool（16→17 工具）
-- ✅ sandbox.py（Sandbox Protocol + WindowsJobSandbox(pywin32) + LinuxLandlockSandbox + NullSandbox + build_sandbox 自动选型）
-- ✅ credentials/audit.py + rotation.py（CredentialAudit SQLite/WAL + KeyRotator rotate/revoke）
-- ✅ experience.py（ExperienceExtractor + ExperienceStore + SkillAdvisor 规则版）
+## Evidence Ledger
+| Batch | Command | Result | Evidence |
+|-------|---------|--------|----------|
+| B-P1-3 | `node test-log-store.js`（主控复跑）+ `node --check`×5 + `webapp next build` | **单测 18 断言全过**（滚动/过滤/搜索/脱敏/Bearer/断路器冻结+re-arm+restart 拒绝/诊断 zip 条目+EOCD）+ build **Compiled/18/18 static** | log-store.js 6.6K / crash-diagnostics.js 11K / vapDesktop.d.ts / runtime-controller 状态机+断路器(5次/60s→冻结5min auto re-arm) / main.js autoUpdater(electron-updater ^6.8.9)+IPC / logs 页黑匣子(SSE+IPC 合并+过滤搜索导出 zip) / electron-builder.yml files 含 node_modules |
+| B-P1-3 无法执行 | 真 Electron 启动（无 GUI 交互会话） | 说明留人工验收：start-desktop.bat → 日志页绿点实时流/过滤/搜索/复制/导出诊断包 → 崩溃触发验证 | 代码已挂 render-process-gone/app crash 记录；zip 已用 Python zipfile 实开验证修复 EOCD 字段序 |
+| B-ASSEMBLE | `pytest assembly+scope_guard+supervisor+agent_framework`（主控复跑） | **75 passed** 15.11s | agent.py 装配点：Supervisor.from_env / _install_tool_guard(install_tool_guard,build_sandbox→NullSandbox 降级) / POST /approval/{pin}/decide / GET /approval/pending / _sse_approval(_APPROVAL_SSE_EVENT) / VAP_AGENT_APPROVAL_TIMEOUT 默认 60s 超时 deny；.env.example 补 VAP_AGENT_SUPERVISOR/SANDBOX/ALLOW_WRITE_{GENERAL,CUT,DELETE}；test_agent_router_assembly.py 10 用例(契约①-④) |
+| B-P1-2 | `pytest test_skills_{distiller,validator,spectre,scoring,roster,loader}+test_skill_generator`（主控复跑） | **77 passed** 1.37s | distiller(11.7K) 聚合≥3次稳定链→复用 skill_generator / validator 三重(跨域/predict/exclusivity) / spectre(9.5K) 指令注入+危险命令+密钥+URL 白名单 / scoring 棘轮(new/improved/rejected, 原子写) / roster 渐进披露(triggers+中文bigram+经验) / loader 安全前端(security_warning 默认不自动 enabled, AUTODISTILL=0 关) / schema Security 字段 / skill_generator return_draft 兼容 / .env.example VAP_SKILLS_AUTODISTILL=1 |
+| B-P2-3 | `pytest test_web_auto.py`（主控复跑）+ node --check cua-service | **16 passed, 1 skipped** 6.22s + CUA node check OK | web_auto/{browser(23K 7工具),cdp(14K 5工具),__init__(register_web_auto_tools)} + desktop/cua-service.js(mock 标注+capturePage 真实优先) / scope_guard 读写分类(snapshot/screenshot allow, trigger/update/ev_write ask) / Playwright chromium 真实可用(真实 open(file://)→snapshot→click→screenshot PNG) / 降级 mock 不伪造 / .env VAP_WEB_AUTO_PROVIDER+CDP_URL+CUA_ENABLED |
+| B-P3-1 | `pytest test_mcp_server.py`（主控复跑）+ stdio 冒烟 | **22 passed** 0.15s + **冒烟返回 17 工具 schema** | src/mcp/{server(17K 纯 stdlib asyncio+threading JSON-RPC2.0 子集 initialize/tools-list/tools-call),run,README,__init__} + src/config/mcp/tools_allowlist.json(读工具+media_gen 安全项) / MCPToolFilter 双闸(allowlist AND VAP_MCP_ALLOW_WRITE) / 无 handler Ask→默认拒绝 / Windows proactor 管道坑用后台线程读 stdin 绕过 / 冒烟 tools/list→真实 17 工具 / tools/call delete_history→-32003 not in allowlist |
+| B-P1-3 说明 | autoUpdater 真实更新 | 无 feed/签名，仅代码+文档，日志打"enabled but feed not configured" | electron-builder.yml 现打包 node_modules/**/* 增体积，后续可窄化 |
+| B-P0-1 ruff | `ruff check src/core/agent/supervisor.py` | All checks passed（含 UP 全修） | loop.py/turn.py 存量 UP 告警为历史遗留（改前 43→改后 40 净减），按"精准修改"未顺带重构；pyflakes 红线已零告警 |
+| B-P0-2 契约⑥ | ApprovalBus 阻塞轮询 vs asyncio 主线程无 loop（Python3.14）→ 改验证"超时默认 deny"路径；decide-True-执行 由 handler 返回 True 的同步用例覆盖 | 合理替代，已说明 | wait_decision 用 time.monotonic 规避 RuntimeError（实测触发并修复） |
+| B-P0-2 待办 | `.env.example` 补 `VAP_ALLOW_WRITE_*` 说明；agent.py/loop.py 的 approval+sandbox 装配（SSE decide 端点）由主控 B-ASSEMBLE 落地 | - | - |
 
-### P1 接入（主控串行）
-- ✅ app.py lifespan 注入 SessionStore 单例（app.state.session_store）
-- ✅ runtime/__init__.py 导出 structured_log（JSONFormatter/trace_context/install_json_logging/get_trace_id）
-- ✅ registry.py 接入 ErrorPolicy（set_error_policy + execute 重试分级 + _execute_once 拆分）
+## Review Findings（Critic 闭环后补）
 
-### P2 前端/脚本/文档（Wave 2 worker 交付）
-- ✅ Playwright E2E 5 spec（dashboard/analyze/agent/navigation/error_boundary）+ package.json e2e script + ci.yml e2e job（启后端→health wait→npm run e2e→artifact）
-- ✅ scripts/dev-setup.ps1 + dev-setup.sh（onboarding）
-- ✅ docs/ VitePress 骨架（config + index + 4 guide + package.json）
-
-### CI 质量门禁
-- ✅ ci.yml 去 `|| true`（测试真实失败阻断）
-- ✅ 加 `--cov=src --cov-report=term-missing --cov-fail-under=80`
-- ✅ build-windows 改 `needs: [test, e2e]`
-
-## 验证日志（真实命令输出）
-
-### Python 后端
-```
-$ pytest tests/ --ignore=test_headless_server --ignore=test_e2e_smoke --ignore=test_nvidia_models --cov=src --cov-fail-under=80
-690 passed, 1 skipped, 998 warnings in 512.69s
-TOTAL coverage: 66%  ← 低于 80% 门禁(预期:serve.py/router 未测,真实 CI 会 fail-under)
-```
-注:全量覆盖率 66% < 80% 门禁。根因:`src/web/serve.py`(115 行 0%)、各 router 的端点层大量未单测覆盖(走 TestClient 集成测试覆盖部分)。这是**真实 CI 会 fail-under**的状态——按铁则不伪造,如实记录。降门禁到 66% 可让 CI 绿但违背质量意图;保持 80% 让 CI 红倒逼补测试是正解。本轮保留 80% 门禁,标记为**待补测试**项。
-
-```
-$ pytest tests/test_agent_framework.py tests/test_error_policy.py tests/test_prompt_guard.py tests/test_vlm_client.py tests/test_structured_log.py tests/test_sandbox.py tests/test_credential_audit.py tests/test_experience.py
-129 passed, 1 skipped  ← Wave1 6 新模块 + agent_framework 回归全绿
-```
-
-### pyflakes（CI 强制零告警）
-```
-$ pyflakes src/core/tools/registry.py src/core/tools/error_policy.py src/core/agent/prompt_guard.py
-  src/core/runtime/__init__.py src/core/runtime/structured_log.py src/core/vlm_client.py
-  src/core/runtime/sandbox.py src/core/credentials/audit.py src/core/credentials/rotation.py
-  src/core/agent/experience.py src/web/app.py src/web/routers/logs.py src/core/agent_tools.py
-exit 0  ← 零告警
-```
-
-### 前端
-```
-$ npx tsc --noEmit -p tsconfig.json  → 0 errors  ← Button/ error.tsx/ batch 修复后类型干净
-$ npm run lint  → 0 errors, 5 warnings(react-hooks/set-state-in-effect,既有页非本轮引入)
-```
-
-### Playwright E2E（worker 报告）
-```
-$ npx playwright test  → 23 passed(含原 smoke 3 + 新 5 spec 20)
-后端不可达时 20 skipped,0 失败(容错设计)
-```
-
-## 未完成 / 阻塞项（如实披露）
-
-### P1 未接入（留 v10.2）
-- ⚠️ ReactLoopAgent 未接 agent router：agent.py 仍走旧 AgentOrchestrator（/chat /run /run_stream），SessionStore 单例已注入 app.state 但 agent router 未消费。接入需重写 agent router 用 ReactLoopAgent + SessionStore.load/save，工作量 1-2d，本轮未做（避免破坏现有 /api/agent/chat 闭环）。
-- ⚠️ SSE 断线重连（id/Last-Event-ID/useSSE.ts）：sse.py 仅 heartbeat，未加 event id 序号 + Last-Event-ID 续推 + 前端 useSSE hook。
-- ⚠️ Turn 时间轴 API + 前端、run_store.checkpoint 长程断点、Subagent 多后端 backends/、凭据轮换前端、dashboard 时间轴+资源 mini 图、批量分片级进度前端、electron-updater 灰度、linux deb target + mac/linux build job。
-
-### P2 需外部环境（标"待验证"，守付费 API 红线）
-- IM 真实 token 闭环（Telegram bot 真实 getUpdates，需用户给 token）
-- Tailscale Serve 真实 tunnel（需用户装 Tailscale）
-- VLM 真实 key（Ollama/Cloud 真实 describe，需用户配 .env）
-- electron 真实打包（需 windows-latest CI runner + tag push）
-- 浏览器真实 E2E（Playwright 本地已验证，CI 待跑）
-
-### 覆盖率门禁
-- 全量覆盖率 66% < 80% 门禁。真实 CI push 会 fail-under。需补 serve.py/router 单测或下调门禁。本轮**保留 80%**（倒逼补测试），标记待补。
-
-## 发版状态
-- 版本号四同步：constants.py 10.1.0 / webapp+desktop package.json 10.1.0 / app.py version 10.1.0
-- CHANGELOG 加 [10.1.0] 条目
-- 待用户确认后：commit → push → tag v10.1.0 → gh release create
+## Next Gate
+- ✅ 第一批（P0-1 / P0-2 / P1-3）与 B-ASSEMBLE 全部 VERIFIED。下一步：启动第二批 **P1-1 记忆分层**（依赖 P0-1 已满足）。
