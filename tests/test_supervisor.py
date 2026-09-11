@@ -19,6 +19,8 @@ import time
 import pytest
 
 from src.core.agent import AgentConfig, ReactLoopAgent, Session, SessionEvent
+from src.core.agent.session import SessionStore
+from src.core.tools.registry import ToolRegistry
 from src.core.agent.loop import LLMChunk, MockLLMClient
 from src.core.agent.supervisor import (
     BudgetGuard,
@@ -233,13 +235,15 @@ def _echo_registry() -> ToolRegistry:
     return reg
 
 
-def test_supervisor_flag_default_off_zero_regression(monkeypatch) -> None:
-    """feature flag 默认关：AgentConfig() 无 supervisor，原 ReactLoop 行为不变。
+def test_supervisor_flag_default_on_v1031(monkeypatch) -> None:
+    """v10.3.1 (P0-1):feature flag 默认开 —— Supervisor.from_env() 返回实例。
 
-    原 test_agent_framework 的 ReactLoopAgent 用例（tool→final stop）仍绿。
+    显式设 false/0/off 才返回 None(回退 v10.2 行为)。
     """
     monkeypatch.delenv("VAP_AGENT_SUPERVISOR", raising=False)
-    assert Supervisor.from_env() is None  # 默认关
+    assert Supervisor.from_env() is not None  # 默认开(v10.3.1)
+    monkeypatch.setenv("VAP_AGENT_SUPERVISOR", "false")
+    assert Supervisor.from_env() is None  # 显式关
 
     mock = MockLLMClient([
         LLMChunk(final_tool_calls=[
@@ -363,3 +367,54 @@ def test_supervisor_pause_mode_continues() -> None:
     # pause 事件已写入 session 审计
     kinds = [e.payload.get("kind") for e in session.events]
     assert "stuck_paused" in kinds
+
+
+# ---------------------------------------------------------------------------
+# v10.3.1 (P0-6):loop 消费 cond.messages 的端到端回归
+# (此前 loop 丢弃压缩结果,derive_messages 仍投影全量 → 摘要反增 token)
+# ---------------------------------------------------------------------------
+
+
+def test_loop_uses_condensed_messages(tmp_path) -> None:
+    """压缩命中轮,LLM 收到的消息条数 < 全量投影(P0-6 核心断言)。
+
+    用 max_events=12 的真实阈值(6 轮 × 2 事件 + system = 13 > 12),
+    loop 内压缩自然命中,断言 stream 收到的 messages 是压缩集:
+      1. 条数明显小于全量投影
+      2. 摘要 system 消息在请求头部
+    """
+    store = SessionStore(str(tmp_path / "cond_loop.db"))
+    session = Session("cond-e2e", system_prompt="SYS")
+    for i in range(6):
+        session.append(SessionEvent(
+            "user", time.time() + i, {"content": f"问题 {i} " + "长" * 60}))
+        session.append(SessionEvent(
+            "assistant", time.time() + i + 0.1,
+            {"content": f"回答 {i} " + "答" * 60}))
+    store.save(session)
+    full = session.derive_messages()
+    assert len(full) >= 13, f"预置 6 轮应 ≥13 条消息,实际 {len(full)}"
+
+    mock = MockLLMClient([LLMChunk(delta_text="ok", stop_reason="stop")])
+    # supervisor:压缩阈值 12(6 轮历史 13 条 > 12 → 命中)
+    sup = Supervisor(SupervisorConfig(
+        enable_stuck=False,
+        enable_compression=True,
+        compress_max_events=12,
+        compress_max_chars=100_000,
+        keep_recent_turns=3,
+        enable_budget=False,
+    ))
+    agent = ReactLoopAgent(AgentConfig(max_steps=2, supervisor=sup),
+                           mock, ToolRegistry(), store=store)
+    asyncio.run(agent.run_turn(session, "再来一问"))
+    assert sup.compressor.compress_count >= 1, "压缩应已命中"
+
+    assert mock.calls, "LLM 应被调用"
+    sent = mock.calls[0]["messages"]
+    assert len(sent) < len(full), \
+        f"loop 应发送压缩级消息({len(sent)}) < 全量({len(full)})"
+    # 摘要在头部(第一个 system 或前两条内)
+    head_texts = " | ".join(m.get("content", "") for m in sent[:2])
+    assert "【历史对话摘要】" in head_texts, \
+        f"摘要 system 应在消息头部: {head_texts[:120]}"

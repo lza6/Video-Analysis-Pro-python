@@ -128,10 +128,20 @@ class ScopeGuard:
 
     # ---- waterfall 钩子 ----
     async def pre_execute(self, call: ToolCall, defn: Any) -> Optional[Ask]:
-        """pre_execute 钩子:ask 等级 → Ask 信号(带审批优先级)。"""
+        """pre_execute 钩子:ask 等级 → Ask 信号(带审批优先级)。
+
+        v10.3.1 (P0-3):危险写与一般写携带不同 priority,前端可据此
+        呈现危险等级配色/文案(此前 priority 全链路是常量 'write')。
+        Ask 是 frozen dataclass,用 dataclasses.replace 构造新实例。
+        """
         level, reason = self.decision(call)
         if level == _ASK:
-            return Ask(prompt=reason, default="deny")
+            cat = self.classify(call.name)
+            priority = ("dangerous_write" if cat == "dangerous_write"
+                        else "write")
+            from dataclasses import replace as _dc_replace
+            return _dc_replace(Ask(prompt=reason, default="deny"),
+                               priority=priority)
         return None
 
 
@@ -160,12 +170,17 @@ WRITE_PATTERNS: Tuple[str, ...] = (
     "send",
     "write",
     "save",
+    # v10.3.1 (P0-3):真实落盘的媒体生成工具此前因无写关键词被误归 read
+    # → allow,静默写盘。make_*(make_subtitle/make_short_video/
+    # make_voiceover)产物均落盘,归 write(ask 审批)。
+    "make_",
 )
 
 #: 剪辑落盘子集:命中且在写操作内,受 VAP_ALLOW_WRITE_CUT 控制
 CUT_WRITE_PATTERNS: Tuple[str, ...] = ("cut", "highlight_cut")
 
-#: 危险写关键词(delete_* / 落盘 / 网络发送 / 监控启动):命中必须审批
+#: 危险写关键词(delete_* / 落盘 / 网络发送 / 监控启动 / 任意代码执行):
+#: 命中必须审批
 DANGEROUS_WRITE_PATTERNS: Tuple[str, ...] = (
     "delete",
     "highlight_cut",
@@ -174,6 +189,13 @@ DANGEROUS_WRITE_PATTERNS: Tuple[str, ...] = (
     "send_",
     "_send",
     "im_send",
+    # v10.3.1 (P0-3):cdp_evaluate 可在页面执行任意 JS —— 等价于任意
+    # 代码执行,此前因含 "evaluate"(无写关键词)被误归 read → allow。
+    # 归危险写:必须审批(超时默认 deny)。
+    "cdp_evaluate",
+    # 同族:cdp_eval_write 显式写(此前靠 "write" 命中归 write/ask,
+    # 统一收进危险写,语义与"任意 JS"一致)。
+    "cdp_eval_write",
 )
 
 
@@ -260,8 +282,9 @@ def install_tool_guard(
     sandbox: Any = None,
     enabled: bool = True,
     guard: Optional[ScopeGuard] = None,
+    wire_error_policy: bool = True,
 ) -> ScopeGuard:
-    """把 ScopeGuard + approval + sandbox 装配到 registry。
+    """把 ScopeGuard + approval + sandbox + error_policy 装配到 registry。
 
     由主控统一调用(agent.py / loop.py 不动):
 
@@ -270,6 +293,10 @@ def install_tool_guard(
       2. approval_fn 非 None → registry.set_approval_fn(…)
          None → 用默认 ApprovalBus 回调(build_approval_fn)
       3. sandbox 非 None → registry.set_sandbox(sandbox, enabled=enabled)
+      4. v10.3.1 (P0-4):wire_error_policy=True → registry.set_error_policy
+         (ErrorPolicy() 默认策略:TRANSIENT 指数退避重试 + FATAL 熔断)。
+         此前 `set_error_policy` 自 v10.1 定义以来零调用方 —— 重试/熔断
+         从未在生产生效。
 
     Returns:
         构造出的 ScopeGuard 实例(便于测试断言 / 后续按需调整开关)。
@@ -278,6 +305,24 @@ def install_tool_guard(
         guard = build_guard_from_env()
     if approval_fn is None:
         approval_fn = build_approval_fn()
+    if wire_error_policy and registry._error_policy is None:
+        from src.core.tools.error_policy import ErrorPolicy
+        registry.set_error_policy(ErrorPolicy())
+    # v10.3.1 (P0-4):lock_resolver 接线 —— 按 scope_guard 分类给工具
+    # 上读/写锁(读共享/写独占)。此前 set_lock_resolver 自 v10.1 定义以来
+    # 零调用方,AsyncRWLock 在真实链路是摆设。锁实例按"资源名"共享:
+    # 全局单锁(桌面单用户,简单正确;读工具之间共享读锁并行)。
+    if registry._lock_resolver is None:
+        from src.core.tools.parallel import AsyncRWLock
+        _lock = AsyncRWLock()
+
+        def _lock_resolver(name: str, args: dict):
+            cat = guard.classify(name)
+            if cat == "read":
+                return _lock, "read"
+            return _lock, "write"
+
+        registry.set_lock_resolver(_lock_resolver)
     # 幂等:同一 guard 只挂一次钩子(重复装配不叠加)
     existing = getattr(registry.waterfall, "_scope_guard_installed", False)
     if not existing:

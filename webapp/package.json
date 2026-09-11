@@ -1,6 +1,6 @@
 {
   "name": "tingfeng-hermes-webapp",
-  "version": "10.3.0",
+  "version": "10.3.1",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000",

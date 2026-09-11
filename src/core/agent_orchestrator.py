@@ -557,11 +557,22 @@ def build_agent_system_prompt(tool_descriptions: str = "",
 
 _TOOL_RE = re.compile(r'<tool name="(\w+)">(.*?)</tool>', re.DOTALL)
 
+# v10.3.1:真实 LLM（GLM 系）实测会输出 `<function=NAME>\n{args}\n</function>`
+# / `<function=NAME></function>` 变体（E2E 实测样本），legacy 的
+# `<tool name=…>` 之外补一个兼容模式，双模式都归一到 (name, args)。
+_FUNC_RE = re.compile(
+    r'<function\s*=\s*["\']?(\w+)["\']?\s*>(.*?)(?:</function>|</tool_call>)',
+    re.DOTALL)
+
 
 def parse_tool_call(llm_output: str) -> Optional[tuple[str, dict]]:
     """从 LLM 输出解析首个工具调用（XML 格式，与 Web agent 路由一致）。
 
     返回 (tool_name, args_dict) 或 None。args 既支持 JSON 也支持位置参数。
+    支持两种真实模型输出形态（单点维护）：
+      - `<tool name="x">{...}</tool>`（legacy 约定）
+      - `<function=x>{...}</function>` 或 `<function=x></function></tool_call>`
+        （GLM 系真实输出，v10.3.1 E2E 实测后补）
     纯函数，可单测。
     """
     if not llm_output:
@@ -569,6 +580,8 @@ def parse_tool_call(llm_output: str) -> Optional[tuple[str, dict]]:
     # 先剥思考段(闭合标签),与 Web agent 路由一致
     cleaned = re.sub(r'<think>.*?</think>', '', llm_output, flags=re.DOTALL)
     match = _TOOL_RE.search(cleaned)
+    if not match:
+        match = _FUNC_RE.search(cleaned)
     if not match:
         return None
     tool_name = match.group(1)

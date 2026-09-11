@@ -30,7 +30,9 @@ extraResources:
     filter: ["**/*.py", "**/*.txt", "**/*.md"]
   - from: ../config
     to: config
-    filter: ["**/*.txt", "**/*.ini", "**/*.json"]
+    # v10.3.1 (P0-7):补 **/*.md —— config/skills/*/SKILL.md 此前被
+    # filter 排除,安装包内 0 个 skill(仓库 12 个)。
+    filter: ["**/*.txt", "**/*.ini", "**/*.json", "**/*.md"]
   - from: ../requirements.txt
     to: requirements.txt
 win:

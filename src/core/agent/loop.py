@@ -58,8 +58,8 @@ class AgentConfig:
         max_steps: ReAct 循环步数上限（防失控）。
         step_timeout_sec: 单步超时（None=不超时）。
         auto_tool_filter: 工具白名单（None=全部工具可用）。
-        supervisor: 监督层（卡死/压缩/预算）。None=禁用（feature flag
-            `VAP_AGENT_SUPERVISOR` 默认关，行为零回归）。由主控装配时注入，
+        supervisor: 监督层（卡死/压缩/预算）。v10.3.1 起默认启用
+            （`VAP_AGENT_SUPERVISOR=false` 显式关闭回退）。由主控装配时注入，
             见 `Supervisor.from_env()`。
     """
 
@@ -201,6 +201,10 @@ class ReactLoopAgent:
         self._phase = AgentPhase.RUNNING
         result = TurnResult()
         sup = self.config.supervisor
+        # v10.3.1 (P0-6):本轮压缩后的消息投影(cond.messages)。压缩命中时,
+        # 用它替代全量 derive_messages() —— 否则摘要事件 append 进 session
+        # 后,derive_messages 仍投影全量事件,token 不降反增。
+        condensed_messages: list[dict[str, Any]] | None = None
 
         try:
             # 预算守卫：新 turn 开始前重置 per-turn 计数
@@ -219,8 +223,11 @@ class ReactLoopAgent:
                 if sup is not None and sup.compressor is not None:
                     cond = sup.compressor.compress(session)
                     if cond is not None:
-                        # 压缩摘要已作为新 system 事件 append 进 session（审计），
-                        # 本轮 derive_messages 会自然包含它。
+                        # v10.3.1 (P0-6):消费压缩结果 —— 本轮 LLM 请求改用
+                        # cond.messages(摘要 system + 最近 N 轮),替代全量
+                        # derive_messages()。摘要事件同时 append 进 session
+                        # (append-only 审计),tool_call_id 配对在窗口内不破裂。
+                        condensed_messages = list(cond.messages)
                         log.info(
                             "supervisor: context compressed, "
                             "dropped %d events -> summary(%s)",
@@ -232,7 +239,14 @@ class ReactLoopAgent:
                 await turn.emit(TurnPhase.PRE_STEP)
                 await turn.emit(TurnPhase.STEP_START)
 
-                messages = session.derive_messages()
+                # v10.3.1 (P0-6):压缩命中轮用压缩消息;否则全量投影。
+                # 注意:事件 append-only,超阈后每轮都会命中压缩、持续走
+                # 压缩投影(摘要事件幂等不叠加) —— 直至会话事件被外部清理。
+                if condensed_messages is not None:
+                    messages = condensed_messages
+                    condensed_messages = None
+                else:
+                    messages = session.derive_messages()
                 # 提示注入守卫:工具输出(role=tool)可能含"忽略之前指令"等恶意内容,
                 # 交给 LLM 前先用 guard_messages 包 <tool_output> 标签 + 命中转义,
                 # 防止工具返回污染系统指令(见 prompt_guard.py)。
@@ -304,10 +318,21 @@ class ReactLoopAgent:
                                          {"call": call})
                         await turn.emit(TurnPhase.TOOL_EXECUTE, {"call": call})
                         tr: ToolResult = await self.tools.execute(call)
+                        # v10.3.1 (P0-1 收尾):工具事件附一句大白话解释
+                        # (eli5)。只进事件流供 UI 摘要行/黑匣子人话层渲染,
+                        # **不进 LLM prompt**(避免 token 膨胀)。
+                        try:
+                            from src.core.eli5 import explain_tool_call
+                            human = explain_tool_call(
+                                call.name, call.args, tr)
+                        except Exception:  # noqa: BLE001 — 解释失败不阻断
+                            human = ""
                         await turn.emit(TurnPhase.TOOL_POST_EXECUTE,
-                                         {"call": call, "result": tr})
+                                         {"call": call, "result": tr,
+                                          "human": human})
                         await turn.emit(TurnPhase.TOOL_RESULT,
-                                         {"call": call, "result": tr})
+                                         {"call": call, "result": tr,
+                                          "human": human})
                         result.tool_calls += 1
                         # tool_result event
                         session.append(SessionEvent(

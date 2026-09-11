@@ -266,18 +266,25 @@ def test_adapter_reexport() -> None:
 
 
 def test_scope_guard_browser_read_allow() -> None:
-    """snapshot / screenshot 读操作 → allow。"""
+    """snapshot / screenshot 读操作 → allow。
+
+    v10.3.1 (P0-3):cdp_evaluate 升为危险写(任意 JS),不再 allow ——
+    从读放行清单移除,改入危险写断言(见 test_web_browser_snapshot_is_read)。
+    """
     guard = ScopeGuard(allow_write_general=False,
                        allow_write_delete=False, allow_write_cut=False)
     for name in ("web_browser_snapshot", "web_browser_screenshot",
                  "web_browser_open", "web_browser_navigate",
-                 "cdp_list_targets", "cdp_attach", "cdp_evaluate"):
+                 "cdp_list_targets", "cdp_attach"):
         level, reason = guard.decision(ToolCall(name=name, args={}))
         assert level == "allow", f"{name} 应 allow，实际 {level}（{reason}）"
+    # cdp_evaluate 任意 JS → 危险写 ask(P0-3)
+    level, _ = guard.decision(ToolCall(name="cdp_evaluate", args={}))
+    assert level == "ask", f"cdp_evaluate 应 ask(P0-3)，实际 {level}"
 
 
 def test_scope_guard_browser_write_ask() -> None:
-    """trigger / update（fill 类）/ cdp_eval_write（evaluate 写）→ ask。"""
+    """trigger / update（fill 类）→ ask;cdp_eval_write 危险写 → ask。"""
     guard = ScopeGuard(allow_write_general=False,
                        allow_write_delete=False, allow_write_cut=False)
     for name in ("web_browser_trigger", "web_browser_update", "cdp_eval_write"):
@@ -286,24 +293,36 @@ def test_scope_guard_browser_write_ask() -> None:
 
 
 def test_scope_guard_general_switch_allows_browser_write(monkeypatch) -> None:
-    """VAP_ALLOW_WRITE_GENERAL=1 → web_browser_trigger/cdp_eval_write 放行。"""
+    """VAP_ALLOW_WRITE_GENERAL=1 → web_browser_trigger/update 放行。
+
+    v10.3.1 (P0-3):cdp_eval_write 已升危险写,general 开关**不**放行
+    (与 delete 同语义:危险写只认专用开关,此处断言仍 ask)。
+    """
     monkeypatch.setenv("VAP_ALLOW_WRITE_GENERAL", "1")
     guard = ScopeGuard()
     assert guard.decision(ToolCall(name="web_browser_trigger", args={}))[0] == "allow"
     assert guard.decision(ToolCall(name="web_browser_update", args={}))[0] == "allow"
-    assert guard.decision(ToolCall(name="cdp_eval_write", args={}))[0] == "allow"
+    # 危险写不被 general 开关放行(安全侧)
+    level, _ = guard.decision(ToolCall(name="cdp_eval_write", args={}))
+    assert level == "ask", \
+        f"cdp_eval_write 危险写不应被 general 放行(P0-3)，实际 {level}"
 
 
 def test_web_browser_snapshot_is_read() -> None:
-    """classify：snapshot 工具归类 read（与 allow 断言一致）。"""
+    """classify：snapshot 工具归类 read（与 allow 断言一致）。
+
+    v10.3.1 (P0-3):cdp_eval_write / cdp_evaluate 升为 dangerous_write
+    (任意 JS 执行);cdp_execute 同族(旧名,与 evaluate 同语义)。
+    """
     guard = ScopeGuard()
     assert guard.classify("web_browser_snapshot") == "read"
     assert guard.classify("web_browser_screenshot") == "read"
     assert guard.classify("web_browser_trigger") == "write"
     assert guard.classify("web_browser_update") == "write"
-    assert guard.classify("cdp_eval_write") == "write"
-    assert guard.classify("cdp_evaluate") == "read"
-    assert guard.classify("cdp_execute") == "read"  # 旧名含 evaluate 仍 read（写用 eval_write）
+    assert guard.classify("cdp_eval_write") == "dangerous_write"
+    assert guard.classify("cdp_evaluate") == "dangerous_write"
+    # cdp_execute 是独立旧名工具(非 cdp_evaluate 别名),P0-3 未列,保持 read
+    assert guard.classify("cdp_execute") == "read"
 
 
 # ---------------------------------------------------------------------------

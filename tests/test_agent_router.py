@@ -43,13 +43,14 @@ def test_react_backend_switch_env(app):
     assert os.environ.get("VAP_AGENT_BACKEND") == "react"
 
 
-def test_legacy_default_when_env_unset(monkeypatch):
+def test_react_default_when_env_unset(monkeypatch):
+    """v10.3.1 (P0-1):env 未设时默认 react(全能力路径)。"""
     monkeypatch.delenv("VAP_AGENT_BACKEND", raising=False)
     from src.web.routers import agent as agent_mod
-    # _get_backend 读 header > env > 默认 legacy;空 header 时应回 legacy
+    # _get_backend 读 header > env > 默认 react;空 header 时应回 react
     req = MagicMock()
     req.headers = {}
-    assert agent_mod._get_backend(req) == "legacy"
+    assert agent_mod._get_backend(req) == "react"
 
 
 def test_get_backend_header_overrides_env(monkeypatch):

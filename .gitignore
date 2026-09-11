@@ -16,7 +16,7 @@ venv/
 .venv/
 
 # Runtime artifacts
-logs/
+/logs/
 cache/
 build/
 dist/

@@ -253,11 +253,12 @@ def test_env_flag_gates_write(monkeypatch) -> None:
 def test_scope_guard_ask_blocks_write_without_approval() -> None:
     """真实 registry 的 make_voiceover（classify read）在 allow_write=False 仍可执行。
 
-    scope_guard classify 按「工具名」判定：make_voiceover 不含 create/update/delete/
-    trigger/start/generate/send/write/save 关键词 → 分类 read。这符合项目既有
-    scope_guard 分类（P2-1 media_gen 里只有 create_cut_clip 含 cut →
-    dangerous_write；make_short_video 无匹配仍 read）。工具名的读/写边界是
-    **项目既有的**，MCP 白名单不额外收窄它。
+    scope_guard classify 按「工具名」判定：v10.3.1 (P0-3) 起 make_*
+    (make_subtitle/make_short_video/make_voiceover) 真实落盘 → 归类
+    **write**(ask 审批) —— 此前因无写关键词误归 read。MCP 白名单虽
+    显式含 make_subtitle/make_voiceover,但 allow_write=False 时
+    can_write=False(与"写工具默认不放行"一致);对外只读消费方若需
+    调 make_*,须 VAP_MCP_ALLOW_WRITE=1(双闸)。
 
     MCP 层真正收紧的是**显式写工具**（classify 为 write/dangerous_write）：
       即使 allowlist 显式含 delete_history，allow_write=False 时也不可执行；
@@ -265,9 +266,16 @@ def test_scope_guard_ask_blocks_write_without_approval() -> None:
     这守住了「写工具默认不放行」「危险写必须双闸」的审批边界。
     """
     build_tool_registry(allow_write=False)
-    # 读工具（classify read）默认放行（对外只读的安全性）
+    # v10.3.1 (P0-3):make_* 归 write → allow_write=False 时不可执行
     filt_read = MCPToolFilter(allowlist=["make_voiceover"], allow_write=False)
-    assert filt_read.can_write("make_voiceover") is True
+    assert filt_read.can_write("make_voiceover") is False, \
+        "P0-3 后 make_voiceover 是 write,allow_write=False 应拒绝"
+    filt_read_ok = MCPToolFilter(allowlist=["make_voiceover"], allow_write=True)
+    assert filt_read_ok.can_write("make_voiceover") is True
+    # 纯读工具不受影响
+    filt_true_read = MCPToolFilter(allowlist=["get_video_meta"],
+                                   allow_write=False)
+    assert filt_true_read.can_write("get_video_meta") is True
     # 显式写工具：白名单含 + allow_write=False → 仍不可执行（硬边界）
     filt_write = MCPToolFilter(allowlist=["delete_history"], allow_write=False)
     assert filt_write.can_write("delete_history") is False

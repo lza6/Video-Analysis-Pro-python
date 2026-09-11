@@ -65,16 +65,16 @@ def _clear_backend_env(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_supervisor_default_off_is_none(monkeypatch) -> None:
-    """VAP_AGENT_SUPERVISOR 默认(0/缺省)→ config.supervisor 为 None。"""
+def test_supervisor_default_on_v1031(monkeypatch) -> None:
+    """v10.3.1 (P0-1):VAP_AGENT_SUPERVISOR 默认开 → config.supervisor 非 None。"""
     _clear_backend_env(monkeypatch)
 
     from src.web.routers import agent as mod
 
     agent, session, store = mod._build_react_agent(
         _make_request(), "s-test-null", None, "你好")
-    assert agent.config.supervisor is None, \
-        f"默认 supervisor 应为 None,实际 {agent.config.supervisor}"
+    assert agent.config.supervisor is not None, \
+        f"v10.3.1 默认 supervisor 应启用,实际 {agent.config.supervisor}"
 
 
 def test_supervisor_default_explicit_zero_is_none(monkeypatch) -> None:
@@ -454,3 +454,40 @@ def test_approval_endpoint_auth_required(monkeypatch, approval_app) -> None:
     # 恢复空 token 便于后续 fixture 清理(settings.cache_clear 后重新读)
     monkeypatch.setenv("VAP_HEADLESS_TOKEN", "")
     get_settings.cache_clear()
+
+# ---------------------------------------------------------------------------
+# v10.3.1 (P0-8):skills 正文注入(此前只注入 name+description,
+# SKILL.md 的模板/决策表从未到达模型)
+# ---------------------------------------------------------------------------
+
+
+def test_skills_body_injected_when_roster_hits(monkeypatch) -> None:
+    """roster 命中时 system_prompt 应含 SKILL.md **正文**(非仅名字)。"""
+    monkeypatch.setenv("VAP_AGENT_BACKEND", "react")
+    monkeypatch.setenv("VAP_SKILLS_BODY_BUDGET", "600")
+    _clear_backend_env(monkeypatch)
+    from src.web.routers import agent as mod
+
+    agent, session, store = mod._build_react_agent(
+        _make_request(), "s-skills-body", None,
+        "帮我做一个 PPT 演示文稿")
+    sp = agent.config.system_prompt
+    # 正文特征:SKILL.md 的内文标题(如"## 适用场景"),而非只有 name: desc
+    assert "## 适用场景" in sp or "### " in sp, \
+        "P0-8:命中 skill 的正文应进入 system_prompt"
+    # 不应把 frontmatter(name: ... triggers:)原样带进去
+    assert "triggers:" not in sp, "frontmatter 不应注入"
+
+
+def test_skills_body_budget_truncates(monkeypatch) -> None:
+    """正文总量受 VAP_SKILLS_BODY_BUDGET 约束(默认 2000 字符)。"""
+    from src.web.routers.agent import _build_skills_block
+    from src.skills import load_skills
+    skills = load_skills()
+    block = _build_skills_block(
+        ["builtin-video-summary", "ppt-deck"], skills)
+    budget = 2000
+    # block 头部说明约占 60 字符,正文应 ≤ budget + 头部 + 截断标注余量
+    assert len(block) < budget + 200, \
+        f"正文块应受预算约束,实际 {len(block)}"
+    assert "### " in block

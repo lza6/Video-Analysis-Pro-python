@@ -5,7 +5,7 @@
 复用 src/core/agent_orchestrator.AgentOrchestrator(纯同步,无 QThread)。
 LLM 走 src/core/logic.build_llm_client(ConfigManager),读 LastUsed 配置。
 
-v10.2:Feature Flag `VAP_AGENT_BACKEND`(env,默认 `legacy` 零回归)。
+v10.3.1:Feature Flag `VAP_AGENT_BACKEND`(env,默认 `react`;显式设 legacy 可回退)。
   - `legacy`:走旧 AgentOrchestrator + _PLAN_CACHE(视频分析还在用)
   - `react`:走新 ReactLoopAgent + SessionStore(关窗不丢历史 + Turn 时间轴 API)
 react 路径用 if 分支隔离,不改 legacy 函数体。SyncLLMClientAdapter
@@ -179,16 +179,64 @@ async def approval_pending() -> dict:
 
 # ============================ backend 选择 ============================
 
-def _get_backend(request: Request) -> str:
-    """选择 agent 后端:header > env > 默认 legacy。
+def _build_skills_block(hit_names: list[str], skills: tuple) -> str:
+    """P0-8:把命中 skill 的**正文**组装成 system prompt 的 SKILLS 段。
 
-    header `x-agent-backend` 优先(便于测试与单请求切换),其次 env
-    `VAP_AGENT_BACKEND`(默认 `legacy`,零回归)。非法值回退 legacy。
+    此前只注入 "name: description"(agent_prompt.match_skills / roster
+    join),SKILL.md 的模板与决策表从未到达模型 —— skills 只是名字。
+    现按命中读正文,总量受 VAP_SKILLS_BODY_BUDGET(默认 2000 字符)约束:
+    逐个取正文直到预算耗尽,超限截断并标注。正文缺失/读取失败退化为
+    name+description(与旧行为一致)。
+    """
+    budget = int(os.environ.get("VAP_SKILLS_BODY_BUDGET", "2000") or 2000)
+    by_name = {s.name: s for s in skills}
+    parts: list[str] = []
+    used = 0
+    for name in hit_names:
+        sk = by_name.get(name)
+        if sk is None:
+            continue
+        body = ""
+        try:
+            body = sk.path.read_text(encoding="utf-8").strip()
+        except Exception:  # noqa: BLE001 — 读失败退化为摘要行
+            body = ""
+        if body:
+            # 剥 frontmatter(--- ... ---),正文直接可用
+            if body.startswith("---"):
+                end = body.find("\n---", 3)
+                if end != -1:
+                    body = body[end + 4:].strip()
+            remain = budget - used
+            if remain <= 0:
+                parts.append(f"### {name}(预算已用尽,未注入正文)")
+                continue
+            body_cut = body[:remain]
+            mark = "" if len(body) <= remain else "(正文超预算已截断)"
+            parts.append(f"### {name}\n{body_cut}{mark}")
+            used += len(body_cut)
+        else:
+            parts.append(f"### {name}: {sk.description}")
+    if not parts:
+        return ""
+    return ("# SKILLS\n以下是与当前请求相关的用户工作流指引"
+            "(含完整正文,按指引执行):\n\n" + "\n\n".join(parts))
+
+
+def _get_backend(request: Request) -> str:
+    """选择 agent 后端:header > env > 默认 react。
+
+    v10.3.1 (P0-1):默认从 `legacy` 切为 `react` —— v10.3.0 的监督层/
+    写审批/分层记忆/skills roster 全部只挂在 react 路径,默认 legacy
+    等于这些能力对默认用户不存在(P0"Deliver, not Build")。
+    header `x-agent-backend` 优先(便于灰度与单请求切换),其次 env
+    `VAP_AGENT_BACKEND`(默认 `react`;显式设 `legacy` 可回退旧引擎)。
+    非法值回退 react。
     """
     backend = request.headers.get("x-agent-backend", "").lower()
     if not backend:
-        backend = os.environ.get("VAP_AGENT_BACKEND", "legacy").lower()
-    return backend if backend in ("legacy", "react") else "legacy"
+        backend = os.environ.get("VAP_AGENT_BACKEND", "react").lower()
+    return backend if backend in ("legacy", "react") else "react"
 
 
 # ============================ SyncLLMClientAdapter ============================
@@ -197,6 +245,10 @@ def _get_backend(request: Request) -> str:
 # 用于从 LLM 全文输出里剥出干净的面向用户的文本(delta_text)。
 _THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 _TOOL_TAG_RE = re.compile(r'<tool name="\w+">.*?</tool>', re.DOTALL)
+# v10.3.1:<function=NAME>…</function> 变体(GLM 系真实输出,E2E 实测)
+_FUNC_TAG_RE = re.compile(
+    r"<function\s*=\s*[\"']?\w+[\"']?\s*>.*?(?:</function>|</tool_call>)",
+    re.DOTALL)
 
 
 class SyncLLMClientAdapter:
@@ -277,9 +329,10 @@ class SyncLLMClientAdapter:
         parsed = parse_tool_call(full_text)
         if parsed:
             tool_name, args = parsed
-            # 剥 <think>...</think> 与 <tool>...</tool> 标签,留干净文本
+            # 剥 <think>...</think> 与 <tool>/<function> 标签,留干净文本
             cleaned = _THINK_TAG_RE.sub("", full_text)
             cleaned = _TOOL_TAG_RE.sub("", cleaned)
+            cleaned = _FUNC_TAG_RE.sub("", cleaned)
             yield LLMChunk(
                 delta_text=cleaned.strip(),
                 final_tool_calls=[{
@@ -339,25 +392,22 @@ async def chat(req: AgentChatRequest, request: Request) -> dict:
 
 
 async def _react_chat(req: AgentChatRequest, request: Request) -> dict:
-    """react 路径 /chat:跑一个 ReactLoopAgent turn + 持久化 Session。
+    """react 路径 /chat:只做意图分析,返回执行契约(不跑 turn)。
 
-    生成 session_id(uuid4 hex),前端拿到后续 /run_stream 带此 id 续接。
-    无 LLM 凭据时 SyncLLMClientAdapter 降级返回意图分析占位,不崩。
+    v10.3.1 (P0-2):生成 session_id(uuid4 hex),返回
+    `auto_run=True + session_id + plan_steps=[]` —— 前端凭它订阅
+    /run_stream?session_id=…&text=…,执行(含审批 SSE)在那里发生。
+    此前 /chat 内跑 turn 且返回 auto_run=False → 审批事件无消费方,
+    写工具静默挂 60s 后 deny。
     """
     session_id = uuid.uuid4().hex
-    agent, session, session_store = _build_react_agent(
-        request, session_id, req.job_id, req.text)
-    result = await agent.run_turn(session, req.text)
-    # 持久化(关窗不丢历史):run_turn 内部已 _persist,这里再 save 一次
-    # 保证 final_text 落库(run_turn 的 _persist 在 final_text 设置后调用,
-    # 但崩溃恢复路径下显式 save 更稳)
-    session_store.save(session)
     return {
         "session_id": session_id,
-        "reply": result.final_text or "",
+        "reply": "",
         "intent": "react",
         "plan_steps": [],
-        "auto_run": False,
+        # 前端订阅 /run_stream 的判据;审批事件由此获得投递通道。
+        "auto_run": True,
     }
 
 
@@ -395,19 +445,25 @@ def run_step(req: AgentRunRequest, request: Request) -> dict:
     "/run_stream",
     dependencies=[Depends(require_auth), Depends(require_rate_limit)],
 )
-async def run_stream(request: Request, job_id: str | None = None) -> StreamingResponse:
+async def run_stream(
+    request: Request,
+    job_id: str | None = None,
+    text: str | None = None,
+    session_id: str | None = None,
+) -> StreamingResponse:
     """SSE 流式自动执行整个 plan,逐步投递 step 事件直到 done。
 
     legacy 路径:前端一次性调用,后端循环 run_plan 直到完成,每步作为
     SSE event 投递。闭环执行:chat → run_stream → 每步实时显示。
 
-    react 路径(VAP_AGENT_BACKEND=react):query param `session_id` 续接
-    历史(无则新建)。简化方案:run_turn 整体 await(同步等完),结束前
-    一次性投 `done` event + 全文。真正逐 phase 流式留 v10.3。
+    react 路径(VAP_AGENT_BACKEND=react):`session_id` 续接历史(无则新建);
+    `text` 是本次用户输入(P0-2 起由 /chat 返回 auto_run=True 后前端
+    带 text 重放 —— /chat 只做意图分析,真正执行在此端点)。run_turn
+    整体 await,结束前投 `done` event + 全文;审批事件实时推 SSE。
     """
     backend = _get_backend(request)
     if backend == "react":
-        return await _react_run_stream(request, job_id)
+        return await _react_run_stream(request, job_id, text, session_id)
 
     # ---- legacy 路径(与改动前一致,零回归) ----
     cm = get_config_manager()
@@ -440,12 +496,16 @@ async def run_stream(request: Request, job_id: str | None = None) -> StreamingRe
 
 
 async def _react_run_stream(
-    request: Request, job_id: str | None,
+    request: Request, job_id: str | None, text: str | None,
+    session_id_param: str | None,
 ) -> StreamingResponse:
     """react 路径 /run_stream:await run_turn,审批事件实时推 SSE。
 
+    P0-2 契约:/chat 只返回 auto_run=True + session_id(不跑 turn),
+    前端带 `text`(用户输入)与 `session_id` 请求本端点 —— 真正的
+    run_turn 在这里执行,审批事件才有 SSE 消费方。
+
     session_id 从 query param 取(无则新建),跑完 save 持久化。
-    逐 phase 流式留 v10.3(需 TurnHooks + asyncio.Queue 投递)。
 
     v10.2 (B-FIN-2 MAJOR-1):run_turn 期间写工具触发 Ask 时,approval_fn
     会把 approval-request 事件 put 进审批队列。run_turn 在
@@ -455,13 +515,21 @@ async def _react_run_stream(
     """
     import asyncio as _asyncio
 
-    session_id = request.query_params.get("session_id") or uuid.uuid4().hex
+    session_id = session_id_param or uuid.uuid4().hex
+    # P1-1:把用户输入同时给 _build_react_agent(供 roster/skills 按
+    # 意图检索命中)与 run_turn(执行)。
     agent, session, session_store = _build_react_agent(
-        request, session_id, job_id, "")
+        request, session_id, job_id, text or "")
     queue = _approval_sse_queue()
+    # P1-1:收集 run_turn 期间 TurnHooks 发出的 tool_result 人话事件,
+    # 在 done 前统一补发(简化实现:react 的 run_turn 阻塞在 task 中,
+    # phase 级实时投递需 hooks→queue 全链,本版先保证人话可见)。
+    tool_human_events: list[str] = []
 
     async def _run_turn_and_save() -> Any:
-        result = await agent.run_turn(session, "")
+        # P0-2:text 由前端经 /run_stream 重放(此前固定传 "" 导致
+        # 用户输入丢失,run_turn 只收到空消息)。
+        result = await agent.run_turn(session, text or "")
         session_store.save(session)
         return result
 
@@ -485,6 +553,32 @@ async def _react_run_stream(
             except Exception:  # noqa: BLE001
                 break
         result = turn_task.result()
+        # P1-1:从 session 事件里把工具调用翻成大白话(eli5),逐条补发
+        # tool_result 事件 —— 前端 agent 页把 human 渲染为 🔧 摘要行。
+        # 放 done 之前,保证执行结束即有人话回顾。
+        try:
+            from src.core.eli5 import explain_tool_call
+            tool_calls: dict[str, dict] = {}
+            for e in session.events:
+                if e.type == "assistant" and e.payload.get("tool_calls"):
+                    for tc in e.payload["tool_calls"]:
+                        tool_calls[tc.get("id", "")] = tc
+                elif e.type == "tool_result":
+                    tc = tool_calls.get(e.payload.get("tool_call_id", ""), {})
+                    human = explain_tool_call(
+                        tc.get("name", ""),
+                        tc.get("args", {}) or {},
+                        e.payload.get("content", ""))
+                    if human:
+                        tool_human_events.append(_sse(
+                            "tool_result",
+                            {"human": human,
+                             "tool": tc.get("name", ""),
+                             "tool_call_id": e.payload.get("tool_call_id", "")}))
+        except Exception as e:  # noqa: BLE001 — 人话生成失败不影响主流程
+            log.debug("eli5 tool_result 摘要生成失败: %s", e)
+        for ev in tool_human_events:
+            yield ev
         yield _sse("done", {
             "done": True,
             "session_id": session_id,
@@ -784,10 +878,20 @@ def _build_react_agent(
     if session_store is None:
         session_store = SessionStore()
 
-    # 构造 ToolRegistry + 注册 17 个老工具
+    # 构造 ToolRegistry + 注册工具面。
+    # v10.3.1 (A4/A9 接线):此前 media_gen(4)+web_auto(12) 只注册进 MCP,
+    # Web 主路径拿不到 —— 同一产品两套能力。现在统一注册(共 32 个),
+    # 写/危险写工具由 scope_guard 分级管控(ask/超时 deny)。
     registry = ToolRegistry()
     ctx = _AgentContext(request, job_id)
     register_legacy_tools(registry, lambda: ctx)
+    try:
+        from src.core.tools.adapter import register_media_gen_tools, \
+            register_web_auto_tools
+        register_media_gen_tools(registry)
+        register_web_auto_tools(registry)
+    except Exception as e:  # noqa: BLE001 — 可选工具面,失败不阻断 agent
+        log.warning("media_gen/web_auto 工具注册失败(不阻断): %s", e)
 
     # v10.2 (B-ASSEMBLE):工具范围守卫装配(审批走 ApprovalBus + SSE,
     # 超时默认拒绝;sandbox 自动选型,VAP_SANDBOX_ENABLED 默认 false)。
@@ -809,12 +913,16 @@ def _build_react_agent(
     )
 
     # active skills 可选加载(失败不阻断)。
-    # v10.2 (B-FIN-2 MAJOR-4):`VAP_SKILLS_ROSTER=1` 时换用
+    # v10.3.1 (P0-1):`VAP_SKILLS_ROSTER` 默认 1 —— 用
     # src.skills.roster.resolve_skills_for_intent(渐进披露 + 领域语义路由);
-    # 默认 0 保持旧 match_skills 行为(零回归)。
+    # 显式设 0 退回旧 match_skills 全量匹配。
+    # v10.3.1 (P0-8):roster/match 命中的 skill **正文**注入 system prompt
+    # (此前只注入 name+description,SKILL.md 的版式模板/决策表从未到达
+    # 模型 —— skills 只是"名字")。正文按命中裁剪 + 总量上限
+    # (VAP_SKILLS_BODY_BUDGET,默认 2000 字符),超限截断,防止 token 失控。
     active_skills: Optional[str] = None
     roster_skills: list[str] = []
-    use_roster = os.environ.get("VAP_SKILLS_ROSTER", "0").strip().lower() in (
+    use_roster = os.environ.get("VAP_SKILLS_ROSTER", "1").strip().lower() in (
         "1", "true", "yes", "on")
     try:
         from src.skills import load_skills  # type: ignore
@@ -831,7 +939,7 @@ def _build_react_agent(
                 log.debug("roster 匹配失败,回退 match_skills: %s", e)
                 roster_skills = []
         if roster_skills:
-            active_skills = "、".join(roster_skills)
+            active_skills = _build_skills_block(roster_skills, skills)
         elif skills and text:
             from src.core.agent_prompt import match_skills
             active_skills = match_skills(text, skills)

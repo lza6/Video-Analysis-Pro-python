@@ -6,7 +6,7 @@
 
 - **身份**：TingFeng Hermes（听风·赫尔墨斯），由 听风公司 (Tingfeng) 出品，维护者 `lza6`
 - **仓库**：https://github.com/lza6/Video-Analysis-Pro-python
-- **版本**：`v9.0.0`（见 `src/utils/constants.py:APP_VERSION`，改版本要同步 `CHANGELOG.md`）
+- **版本**：`v10.3.1`（见 `src/utils/constants.py:APP_VERSION`，改版本要同步 `CHANGELOG.md`）
 - **License**：GPL-3.0（传染性开源，修改必开源）
 - **Python**：3.10+（CI 矩阵测 3.10 / 3.11，本地 venv 子目录名 `venv`）
 - **Node**：18+（webapp/ Next 16 + desktop/ Electron）
@@ -287,4 +287,4 @@ CI 在打 `v*` tag 时触发 `build-windows` job 跑全量测试 + electron-buil
 
 ---
 
-*最后更新：2026-09-06（v9.0.0）*
+*最后更新：2026-09-11（v10.3.0 / v10.3.1 P0 批次）*

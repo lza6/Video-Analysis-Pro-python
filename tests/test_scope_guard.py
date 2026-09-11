@@ -87,17 +87,21 @@ def test_read_hook_returns_none() -> None:
 
 
 def test_write_operations_ask_by_default(monkeypatch) -> None:
-    """写操作(无开关放行)应返回 ask,pre_execute 产生 Ask 信号。"""
+    """写操作(无开关放行)应返回 ask,pre_execute 产生 Ask 信号。
+
+    v10.3.1 (P0-3):send_* 升为危险写,其 Ask.priority 为
+    'dangerous_write';一般写(create/update/generate)保持 'write'。
+    """
     monkeypatch.delenv(VAP_ALLOW_WRITE_GENERAL, raising=False)
     monkeypatch.delenv(VAP_ALLOW_WRITE_CUT, raising=False)
     monkeypatch.delenv(VAP_ALLOW_WRITE_DELETE, raising=False)
     guard = build_guard_from_env()
-    for name in ("create_job", "update_config", "generate_skill", "send_message"):
+    for name in ("create_job", "update_config", "generate_skill"):
         level, reason = guard.decision(ToolCall(name=name, args={}))
         assert level == "ask", f"{name} 应 ask,实际 {level}({reason})"
         sig = _run(guard.pre_execute(ToolCall(name=name, args={}), None))
         assert isinstance(sig, Ask), f"{name} 应产生 Ask"
-        assert sig.priority == "write"
+        assert sig.priority == "write", f"{name} 一般写 priority 应为 write"
 
 
 # ---------------------------------------------------------------------------
@@ -412,3 +416,96 @@ def test_classify_categories() -> None:
     assert guard.classify("create_job") == "write"
     assert guard.classify("delete_history") == "dangerous_write"
     assert guard.classify("highlight_cut") == "dangerous_write"
+
+
+# ---------------------------------------------------------------------------
+# v10.3.1 (P0-3):真实落盘工具 / 任意 JS 执行的分类修正回归
+# ---------------------------------------------------------------------------
+
+
+def test_media_gen_disk_writers_are_ask(monkeypatch) -> None:
+    """make_subtitle / make_short_video / make_voiceover 真实落盘 →
+    classify=write、decision=ask(此前误归 read → allow,静默写盘)。"""
+    monkeypatch.delenv(VAP_ALLOW_WRITE_GENERAL, raising=False)
+    monkeypatch.delenv(VAP_ALLOW_WRITE_CUT, raising=False)
+    guard = build_guard_from_env()
+    for name in ("make_subtitle", "make_short_video", "make_voiceover"):
+        assert guard.classify(name) == "write", \
+            f"{name} 应 classify=write(P0-3),实际 {guard.classify(name)}"
+        level, _ = guard.decision(ToolCall(name=name, args={}))
+        assert level == "ask", f"{name} 应 ask(P0-3),实际 {level}"
+
+
+def test_cdp_evaluate_is_dangerous_write(monkeypatch) -> None:
+    """cdp_evaluate 可执行任意 JS → classify=dangerous_write、ask
+    (此前误归 read → allow);cdp_eval_write 同样收进危险写。"""
+    monkeypatch.delenv(VAP_ALLOW_WRITE_DELETE, raising=False)
+    guard = build_guard_from_env()
+    for name in ("cdp_evaluate", "cdp_eval_write"):
+        assert guard.classify(name) == "dangerous_write", \
+            f"{name} 应 classify=dangerous_write(P0-3),实际 {guard.classify(name)}"
+        level, _ = guard.decision(ToolCall(name=name, args={}))
+        assert level == "ask", f"{name} 应 ask(P0-3),实际 {level}"
+
+
+def test_ask_priority_distinguishes_dangerous(monkeypatch) -> None:
+    """Ask.priority 分级:一般写='write',危险写='dangerous_write'
+    (前端据此呈现危险等级配色)。"""
+    monkeypatch.delenv(VAP_ALLOW_WRITE_GENERAL, raising=False)
+    monkeypatch.delenv(VAP_ALLOW_WRITE_DELETE, raising=False)
+    guard = build_guard_from_env()
+    sig_write = _run(guard.pre_execute(
+        ToolCall(name="create_job", args={}), None))
+    sig_danger = _run(guard.pre_execute(
+        ToolCall(name="delete_history", args={}), None))
+    assert sig_write.priority == "write"
+    assert sig_danger.priority == "dangerous_write"
+
+
+def test_read_tools_still_allow(monkeypatch) -> None:
+    """读工具不被 P0-3 波及(get_*/search_*/cdp_list_targets 等)。"""
+    guard = build_guard_from_env()
+    for name in ("get_video_meta", "search_web", "cdp_list_targets",
+                 "web_browser_snapshot", "web_browser_screenshot"):
+        level, _ = guard.decision(ToolCall(name=name, args={}))
+        assert level == "allow", f"{name} 应仍 allow,实际 {level}"
+
+
+def test_install_tool_guard_wires_error_policy() -> None:
+    """v10.3.1 (P0-4):install_tool_guard 默认接线 ErrorPolicy
+    (此前 set_error_policy 自 v10.1 定义以来零调用方)。"""
+    reg = ToolRegistry()
+    reg.register(_echo_tool("echo"))
+    assert reg._error_policy is None, "新 registry 应无策略"
+    install_tool_guard(reg, approval_fn=_async_true)
+    assert reg._error_policy is not None, \
+        "P0-4:install_tool_guard 应默认装配 ErrorPolicy(重试/熔断生效)"
+    # 幂等:再装一次不覆盖
+    install_tool_guard(reg, approval_fn=_async_true)
+    assert reg._error_policy is not None
+
+
+def test_install_tool_guard_error_policy_opt_out() -> None:
+    """wire_error_policy=False 可退回无策略行为(兼容旧测试)。"""
+    reg = ToolRegistry()
+    reg.register(_echo_tool("echo"))
+    install_tool_guard(reg, approval_fn=_async_true, wire_error_policy=False)
+    assert reg._error_policy is None
+
+
+async def _async_true(call, sig) -> bool:
+    return True
+
+
+def test_install_tool_guard_wires_lock_resolver() -> None:
+    """v10.3.1 (P0-4):install_tool_guard 接线 lock_resolver
+    (读工具 → read 锁,写工具 → write 锁;此前零调用方)。"""
+    reg = ToolRegistry()
+    reg.register(_echo_tool("get_video_meta"))
+    reg.register(_echo_tool("delete_history"))
+    install_tool_guard(reg, approval_fn=_async_true)
+    assert reg._lock_resolver is not None
+    lock, mode = reg._lock_resolver("get_video_meta", {})
+    assert mode == "read" and lock is not None
+    lock2, mode2 = reg._lock_resolver("delete_history", {})
+    assert mode2 == "write" and lock2 is not None

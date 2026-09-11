@@ -1,8 +1,49 @@
 # Changelog — TingFeng Hermes
 
+## [10.3.1] — 2026-09-11 · 交付闭环（P0"Deliver, not Build"）: 默认路径接通 + 审批/SSE 契约修复 + 工具面统一 + skills 正文注入 + 发布修正
+
+### P0-1 默认路径接通
+- `VAP_AGENT_BACKEND` 默认 **legacy → react**：v10.3.0 的监督层/写审批/分层记忆/roster 全部只挂在 react 路径，默认 legacy 等于这些能力对默认用户不存在。显式设 `VAP_AGENT_BACKEND=legacy` 可回退。
+- `VAP_AGENT_SUPERVISOR` 默认 **false → true**；`VAP_SKILLS_ROSTER` 默认 **0 → 1**（`.env.example` 同步）。
+- **工具面统一（A4/A9）**：`media_gen`(4) + `web_auto`(12) 此前只注册进 MCP，Web 主路径拿不到；现统一注册进 react registry（16 → **32 个工具**），写/危险写由 scope_guard 分级管控。
+
+### P0-2 审批 SSE 契约修复
+- 修复 react 模式审批事件到不了前端的断点：`/chat` 此前返回 `auto_run=false` → 前端不订阅 `/run_stream` → `approval-request` 事件无消费方 → 写工具静默挂 60s 后 deny。现契约：`/chat` 只做意图分析返回 `auto_run=True + session_id`，执行（含审批 SSE）移交 `/run_stream?session_id=…&text=…`。
+- 修复 `/run_stream` 固定传 `""` 导致用户输入丢失的 bug（`text` 参数重放）。
+
+### P0-3 工具风险分类修正 + 审批 UI
+- `make_subtitle` / `make_short_video` / `make_voiceover`（真实落盘）误归 read→allow，升为 **write→ask**。
+- `cdp_evaluate` / `cdp_eval_write`（任意 JS 执行）误归 read→allow，升为 **dangerous_write→ask**（general 开关不放行）。
+- `Ask.priority` 真实分级（`write` / `dangerous_write`，此前全链路常量 "write"）；审批弹窗加危险等级配色、工具中文名、后果一句话说明。
+
+### P0-4 未接线模块了断
+- `set_error_policy`：`install_tool_guard` 默认装配 `ErrorPolicy()`（TRANSIENT 重试 / FATAL 熔断自 v10.1 定义以来首次真实生效）；`wire_error_policy=False` 可退回。
+- `set_lock_resolver`：按 scope_guard 分类接线读/写锁（读共享/写独占，AsyncRWLock 首次真实生效）。
+- `eli5.py`（154 行"工具调用→大白话"翻译器，此前零生产调用）：接入 `loop.py` 工具结果事件 + react `/run_stream` 补发 `tool_result`（带 `human` 字段）→ 前端 agent 页渲染 🔧 人话摘要行。
+
+### P0-5 沙箱安全修复
+- `WindowsJobSandbox` 移除 `KILL_ON_JOB_CLOSE`：assign 的是**后端自身进程**，exit 关 handle 会终止后端。内存/CPU 硬顶保留，进程清理由 runtime-controller 负责。
+
+### P0-6 监督层半成品修复
+- **压缩反增 bug**：`loop.py` 此前丢弃 `ContextCompressor` 返回的 `cond.messages`，消息仍从全量事件派生 → 摘要反增 token。现压缩命中轮用压缩消息（摘要 system + 最近 N 轮），新增 loop 级端到端测试断言"压缩后消息数 < 全量"。
+- 新增 `test_loop_uses_condensed_messages` 端到端回归。
+
+### P0-7 发布闭环 + 版本同步
+- `electron-builder.yml` config filter 补 `**/*.md`（此前安装包内 0 个 skill，仓库 12 个）。
+- `src/web/app.py` FastAPI version 10.2.0 → 10.3.0；`start-desktop.bat` 横幅 v9.0.0 → v10.3.0；`CLAUDE.md` 版本行同步。
+- v10.3.0 条目诚实性勘误（"独立 Critic PASS" 当时无产物）。
+
+### P0-8 skills 正文注入
+- 修复 **A8**：`agent_prompt.py` 只注入 `name: description`，SKILL.md 的版式模板/决策表从未到达模型。现 roster 命中时按 `VAP_SKILLS_BODY_BUDGET`（默认 2000 字符）注入**正文**（剥 frontmatter，超限截断标注），skills 从"名字"变成"真能用"。
+
+### 验证（真实运行）
+- 受影响区域回归：**203 passed**（supervisor/agent_framework/router×3/scope_guard/web_auto/mcp/media_gen/memory×3/skills×2）。
+- 全量标准子集：**1331 passed + 2 skipped**（552.80s，P0 批次后实跑）。
+- `pyflakes`（改动文件）零告警；webapp `tsc --noEmit` 0 错误。
+
 ## [10.3.0] — 2026-09-09 · 全功能闭环：监督层/写审批/记忆分层/skills闭环/Electron黑匣子/视频电商浏览器工具集/MCP/反AI美学 + Windows安装包
 
-### 核心：指南 v2 全部 P0-P3 批次真实落地 + 独立 Critic PASS + 覆盖率 80.25% 门禁达标
+### 核心：指南 v2 全部 P0-P3 批次代码层落地（v10.3.1 勘误：交付层缺口见下条；"独立 Critic PASS" 当时无审查产物留档，独立审查于 v10.3.1 补做）+ 覆盖率 80.25% 门禁达标
 
 **P0-1 Agent 监督层**（`src/core/agent/supervisor.py`）：StuckDetector(同 action/同 tool_args/error 循环 3 规则) + ContextCompressor(事件/字符超阈→中文摘要注入,保留最近 N 轮) + BudgetGuard(per-turn 50k/累计 500k token,超限 BUDGET)；`loop.py` 接入三监督点；`VAP_AGENT_SUPERVISOR` 默认关零回归；TurnStopReason 加 STUCK/BUDGET。
 

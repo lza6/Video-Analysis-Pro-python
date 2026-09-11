@@ -18,7 +18,7 @@
      `BudgetTrigger`，loop 置 `stop_reason=BUDGET` 中断。
 
 纯标准库 + 纯 asyncio（无同步阻塞 IO、无第三方依赖）。feature flag
-`VAP_AGENT_SUPERVISOR`（默认关）由主控装配时读取（见 `Supervisor.from_env`），
+`VAP_AGENT_SUPERVISOR`（v10.3.1 默认开）由主控装配时读取（见 `Supervisor.from_env`），
 `AgentConfig.supervisor=None` 时 ReactLoopAgent 行为零回归。
 """
 from __future__ import annotations
@@ -425,12 +425,12 @@ class Supervisor:
 
     @classmethod
     def from_env(cls) -> Supervisor | None:
-        """按 feature flag `VAP_AGENT_SUPERVISOR`（默认关）装配。
+        """按 feature flag `VAP_AGENT_SUPERVISOR`（v10.3.1 默认开）装配。
 
-        返回 None = 监督层禁用（AgentConfig.supervisor=None，零回归）；
-        返回 Supervisor = 以默认阈值启用三件套。
+        返回 Supervisor = 以默认阈值启用三件套；显式设 false/0/off 时
+        返回 None（监督层禁用，回退 v10.2 行为）。
         """
-        flag = os.environ.get("VAP_AGENT_SUPERVISOR", "false").strip().lower()
+        flag = os.environ.get("VAP_AGENT_SUPERVISOR", "true").strip().lower()
         if flag not in ("1", "true", "yes", "on"):
             return None
         return cls()

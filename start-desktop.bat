@@ -21,7 +21,7 @@ goto :eof
 :main
 call :tee "========================================"
 call :tee "  TingFeng Hermes - Desktop (Electron)"
-call :tee "  v9.0.0"
+call :tee "  v10.3.1"
 call :tee "========================================"
 call :tee ""
 call :tee "Starting Electron desktop shell..."

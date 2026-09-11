@@ -1,6 +1,6 @@
 {
   "name": "tingfeng-hermes-desktop",
-  "version": "10.3.0",
+  "version": "10.3.1",
   "description": "TingFeng Hermes — Electron 桌面壳(复用 webapp/FastAPI)",
   "main": "main.js",
   "author": "Tingfeng (lza6)",

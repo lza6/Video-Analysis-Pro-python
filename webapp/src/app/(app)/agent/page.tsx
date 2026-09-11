@@ -31,6 +31,43 @@ interface PendingApproval {
   timeout: number;
 }
 
+/** 工具中文名映射(P0-3 小白友好:弹窗不再裸显工具名)。 */
+const APPROVAL_TOOL_CN: Record<string, string> = {
+  delete_history: "删除历史记录",
+  delete_video: "删除视频",
+  highlight_cut: "剪辑落盘(高光片段导出)",
+  trigger_batch: "启动批量任务",
+  start_rtsp_monitor: "启动监控流",
+  generate_skill: "生成技能",
+  make_subtitle: "生成字幕文件",
+  make_short_video: "生成竖屏短视频",
+  make_voiceover: "生成配音",
+  create_cut_clip: "剪辑视频片段",
+  web_browser_trigger: "浏览器点击",
+  web_browser_update: "浏览器填写表单",
+  cdp_evaluate: "在页面执行脚本(任意 JS)",
+  cdp_eval_write: "在页面执行写脚本",
+  send_message: "发送消息",
+};
+
+/** 工具后果一句话说明(P0-3:让用户知道"允许"意味着什么)。 */
+const APPROVAL_CONSEQUENCE: Record<string, string> = {
+  delete_history: "将删除该条分析历史记录,删除后不可恢复。",
+  delete_video: "将删除视频文件,删除后不可恢复。",
+  highlight_cut: "将把选中的片段剪辑并写入磁盘。",
+  trigger_batch: "将启动批量处理任务,占用 CPU/GPU 资源。",
+  start_rtsp_monitor: "将连接监控摄像头并开始持续分析。",
+  make_subtitle: "将在磁盘上写入一个字幕文件(SRT/VTT)。",
+  make_short_video: "将在磁盘上写入一个 9:16 短视频文件。",
+  make_voiceover: "将在磁盘上写入一个配音音频文件。",
+  create_cut_clip: "将在磁盘上写入剪辑后的视频片段。",
+  web_browser_trigger: "将在网页上执行一次点击操作。",
+  web_browser_update: "将在网页表单中填写内容。",
+  cdp_evaluate: "将在网页里执行任意 JS 脚本 —— 请确认你信任该操作。",
+  cdp_eval_write: "将在网页里执行写操作脚本。",
+  send_message: "将通过消息渠道向外发送内容。",
+};
+
 /** 流式读取 SSE,逐个解析 event。 */
 async function* readSSE(
   res: Response,
@@ -113,11 +150,27 @@ export default function AgentPage() {
     }
   };
 
-  /** chat 后自动循环执行 plan(SSE 流式),每步实时投到对话流。 */
-  const autoRunPlan = async (jobIdParam: string): Promise<void> => {
-    const url = apiUrl(
-      `/api/agent/run_stream${jobIdParam ? `?job_id=${encodeURIComponent(jobIdParam)}` : ""}`,
-    );
+  /** chat 后自动循环执行 plan(SSE 流式),每步实时投到对话流。
+   *
+   * v10.3.1 (P0-2):react 引擎契约 —— /chat 返回 auto_run=true +
+   * session_id(plan_steps 为空数组),前端凭 session_id 续接
+   * /run_stream?session_id=…。审批事件(approval-request)由此 SSE
+   * 通道投递;此前 react 返回 auto_run=false 导致审批无消费方,
+   * 写工具静默挂 60s 后 deny。
+   */
+  const autoRunPlan = async (
+    jobIdParam: string,
+    sessionIdParam?: string,
+    textParam?: string,
+  ): Promise<void> => {
+    const params = new URLSearchParams();
+    if (jobIdParam) params.set("job_id", jobIdParam);
+    if (sessionIdParam) params.set("session_id", sessionIdParam);
+    // v10.3.1 (Critic B-1 修复):react 执行在 /run_stream,text 必须重放,
+    // 否则 run_turn 收到空输入,模型不知道用户说了什么。
+    if (textParam) params.set("text", textParam);
+    const qs = params.toString();
+    const url = apiUrl(`/api/agent/run_stream${qs ? `?${qs}` : ""}`);
     const res = await fetch(url, { method: "GET" });
     if (!res.ok) {
       const err = await res.text();
@@ -130,7 +183,8 @@ export default function AgentPage() {
           handleApproval(data);
           continue;
         }
-        if (event !== "step" && event !== "done") continue;
+        if (event !== "step" && event !== "done" && event !== "tool_result")
+          continue;
         let payload:
           | AgentRunStreamStepEvent
           | AgentRunStreamDoneEvent
@@ -150,11 +204,26 @@ export default function AgentPage() {
                 : p.status === "skipped"
                   ? "⏭️"
                   : "⏳";
+          // v10.3.1 (P1-1):react 的 tool_result 事件带 human 字段
+          // (eli5 大白话),有则优先展示人话,原始结果折叠进次行。
+          const human =
+            (payload as Record<string, unknown>)?.human as string | undefined;
           appendAgent(
-            `${statusIcon} 步骤${p.index}: ${p.description}\n` +
-              `工具: ${p.tool ?? "(无)"}\n` +
-              `结果: ${p.result ?? "(空)"}`,
+            human
+              ? `${statusIcon} ${human}`
+              : `${statusIcon} 步骤${p.index}: ${p.description}\n` +
+                  `工具: ${p.tool ?? "(无)"}\n` +
+                  `结果: ${p.result ?? "(空)"}`,
           );
+        } else if (event === "tool_result") {
+          // v10.3.1 (P1-1):react 工具结果人话摘要行。
+          try {
+            const p = JSON.parse(data) as { human?: string };
+            if (p?.human) appendAgent(`🔧 ${p.human}`);
+          } catch {
+            /* 忽略解析失败 */
+          }
+          continue;
         } else if (event === "done") {
           const p = payload as AgentRunStreamDoneEvent | null;
           const reason = p?.reason ? `(${p.reason})` : "";
@@ -182,8 +251,12 @@ export default function AgentPage() {
         r.reply ||
           `(意图:${r.intent}${r.skill_name ? ` · skill:${r.skill_name}` : ""})`,
       );
-      // auto_run 标记为 true → 自动闭环执行(SSE 流式逐步投递)
-      if (r.auto_run && r.plan_steps && r.plan_steps.length > 0) {
+      // v10.3.1 (P0-2):react 引擎(auto_run=true + session_id)→
+      // 订阅 /run_stream?session_id=…&text=…(text 重放,Critic B-1);
+      // legacy 引擎(plan_steps>0)→ 原 job_id 流。两种契约统一走 autoRunPlan。
+      if (r.auto_run && r.session_id) {
+        await autoRunPlan(jobId, r.session_id, text);
+      } else if (r.auto_run && r.plan_steps && r.plan_steps.length > 0) {
         await autoRunPlan(jobId);
       }
     } catch (e) {
@@ -254,16 +327,33 @@ export default function AgentPage() {
       </Card>
 
       {approval && (
-        <Card className="p-5 border border-accent/40 shadow-lg">
+        <Card
+          className={
+            "p-5 border shadow-lg " +
+            (approval.priority === "dangerous_write"
+              ? "border-danger/60"
+              : "border-accent/40")
+          }
+        >
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h3 className="text-base font-bold text-white">
-                审批请求: {approval.tool}
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                {approval.priority === "dangerous_write" && (
+                  <span className="text-danger">⚠️ 危险操作</span>
+                )}
+                审批请求: {APPROVAL_TOOL_CN[approval.tool] || approval.tool}
               </h3>
               <p className="text-xs text-mute mt-0.5">
-                {approval.reason || "写操作需人工审批"}
+                {approval.reason ||
+                  (approval.priority === "dangerous_write"
+                    ? "危险写操作,需人工审批"
+                    : "写操作需人工审批")}
+              </p>
+              <p className="text-xs text-mute/70 mt-1">
+                {APPROVAL_CONSEQUENCE[approval.tool] ||
+                  "该操作会改动本地数据。"}
                 <span className="ml-2 opacity-70">
-                  (priority: {approval.priority} · {approval.timeout}s 内决定, 超时默认拒绝)
+                  {approval.timeout}s 内未决定将自动拒绝。
                 </span>
               </p>
             </div>
@@ -279,7 +369,7 @@ export default function AgentPage() {
               onClick={() => decideApproval(true)}
               disabled={approvalBusy}
             >
-              允许
+              允许本次
             </Button>
             <Button
               variant="danger"
@@ -289,7 +379,7 @@ export default function AgentPage() {
               拒绝
             </Button>
             <span className="text-xs text-mute self-center ml-auto">
-              {approvalBusy ? "提交中…" : "超时(60s)将默认拒绝"}
+              {approvalBusy ? "提交中…" : `${approval.timeout}s 后自动拒绝`}
             </span>
           </div>
         </Card>

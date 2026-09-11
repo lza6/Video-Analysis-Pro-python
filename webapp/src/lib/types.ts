@@ -185,6 +185,8 @@ export interface AgentChatResponse {
   reply: string;
   /** 有 plan 步且非 GENERAL 时为 true,前端据此自动循环调 /api/agent/run */
   auto_run?: boolean;
+  /** react 引擎返回的会话 id(前端凭它续接 /run_stream?session_id=…) */
+  session_id?: string;
 }
 
 export interface AgentRunStep {

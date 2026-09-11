@@ -47,7 +47,8 @@ class WindowsJobSandbox:
     """Windows Job Object 沙箱（pywin32 条件依赖）。
 
     设 `JOB_OBJECT_LIMIT_PROCESS_MEMORY` + `JOB_OBJECT_LIMIT_CPU_RATE`
-    + `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，assign 当前进程到 Job。
+    （v10.3.1 P0-5 起**移除 KILL_ON_JOB_CLOSE** —— assign 的是后端自身，
+    关 handle 杀归属进程等于杀后端），assign 当前进程到 Job。
     assign 失败（已属别的 Job / 不支持 nested）raise `SandboxError`，
     建议改用 ForkBackend。pywin32 缺失时构造 raise `ImportError`。
     """
@@ -70,7 +71,14 @@ class WindowsJobSandbox:
         self._job_handle: Any = None
 
     async def enter(self) -> None:
-        """创建 Job + 设限制 + assign 当前进程。assign 失败 raise SandboxError。"""
+        """创建 Job + 设限制 + assign 当前进程。assign 失败 raise SandboxError。
+
+        v10.3.1 (P0-5 安全修复):移除 `KILL_ON_JOB_CLOSE` —— 此前 exit()
+        关闭 Job 最后一个 handle 时,`KILL_ON_JOB_CLOSE` 会**终止归属进程**,
+        而归属进程是**后端自身**(assign 的是 GetCurrentProcess) → 沙箱
+        exit 等于杀死整个后端。内存/CPU 硬顶保留(风险可控),终止语义移除;
+        进程组清理由 runtime-controller 的 taskkill /T 负责。
+        """
         win32job, win32con = self._win32job, self._win32con
         self._job_handle = win32job.CreateJobObject(None, "")
         info = win32job.QueryInformationJobObject(
@@ -78,7 +86,6 @@ class WindowsJobSandbox:
         )
         info["BasicLimitInformation"]["LimitFlags"] = (
             win32con.JOB_OBJECT_LIMIT_PROCESS_MEMORY
-            | win32con.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         )
         info["ProcessMemoryLimit"] = self._memory_limit_bytes
         win32job.SetInformationJobObject(
@@ -93,7 +100,7 @@ class WindowsJobSandbox:
                  "CpuRate": self._cpu_rate_permille},
             )
         except Exception:  # noqa: BLE001
-            logger.warning("WindowsJobSandbox: 设 CPU rate 失败，仅保留内存+KILL限制")
+            logger.warning("WindowsJobSandbox: 设 CPU rate 失败，仅保留内存限制")
         # assign 当前进程（可能失败：已属别的 Job / 不支持 nested）
         try:
             self._win32job.AssignProcessToJobObject(
@@ -113,7 +120,7 @@ class WindowsJobSandbox:
                     self._cpu_rate_permille / 10000.0)
 
     async def exit(self) -> None:
-        """关闭 Job handle（KILL_ON_JOB_CLOSE 自动回收归属进程）。"""
+        """关闭 Job handle（P0-5 起无 KILL_ON_JOB_CLOSE,不终止归属进程）。"""
         if self._job_handle is not None:
             try: self._job_handle.Close()
             except Exception:  # noqa: BLE001
