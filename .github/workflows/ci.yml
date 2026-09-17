@@ -31,6 +31,13 @@ jobs:
         run: |
           pip install ruff
           ruff check src/ launcher.py --select F --ignore F403,F401
+      - name: Wiring gates (P0-7)
+        # 三道门：未接线符号（棘轮，基线 scripts/wiring_baseline.txt）
+        #         版本五同步 / 文档-实现一致（路径存在 + 无 TODO: 残留）
+        # 价值高于任何单个功能修复：本项目反复出现「定义了但没人调用」。
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python scripts/check_wiring.py --check wiring,version,docs
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
