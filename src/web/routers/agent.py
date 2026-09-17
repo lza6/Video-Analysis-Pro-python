@@ -55,6 +55,20 @@ class ApprovalDecisionRequest(BaseModel):
 # 审批等待超时(秒)。工具 ask 后前端须在超时前调 decide;超时默认拒绝(安全侧)。
 _APPROVAL_TIMEOUT_SEC = float(os.environ.get("VAP_AGENT_APPROVAL_TIMEOUT", "60"))
 
+def _step_timeout_from_env() -> Optional[float]:
+    """读 VAP_AGENT_STEP_TIMEOUT(秒)装配单步软超时(P1-10)。
+
+    空/非法/<=0 → None(不超时,零回归)。例如 `VAP_AGENT_STEP_TIMEOUT=30`。
+    """
+    raw = os.environ.get("VAP_AGENT_STEP_TIMEOUT", "").strip()
+    if not raw:
+        return None
+    try:
+        val = float(raw)
+        return val if val > 0 else None
+    except ValueError:
+        return None
+
 # 审批 SSE 事件环形缓冲(进程内,供 /run_stream 的 approval-request 事件复用)。
 # key = pin;value = 已格式化的 SSE 事件文本。容量有限,decide 后由前端的
 # /approval/pending 或直接回调消费。不参与业务决策(仅投递管道)。
@@ -98,11 +112,11 @@ def _approval_sse_queue() -> Any:
         return _APPROVAL_SSE_QUEUE
 
 
-def _make_sse_emitting_approval_fn() -> Any:
+def _make_sse_emitting_approval_fn(approval_queue: Any = None, session_id: Optional[str] = None) -> Any:
     """构造「先 emit SSE 再 wait」的审批回调。
 
-    MAJOR-1:把写工具触发 Ask 时的审批请求作为 SSE 事件推送。实现方式——
-    用 asyncio.Queue 承载审批事件文本(run_stream 生成器消费推送),同时在
+    MAJOR-1:把写工具触发 Ask 时的审批请求作为 SSE 事件推送。approval_queue 非 None 时
+    进**本请求**的队列(v10.5.0 P1-7:多窗口互不串台);否则走进程级单例队列。同时
     模块级 ring buffer 留底(供事后重查 / 无 run_stream 时前端轮询 pending)。
     """
 
@@ -114,11 +128,14 @@ def _make_sse_emitting_approval_fn() -> Any:
             pin = bus.request_approval(
                 {"tool": call.name, "args": call.args or {},
                  "reason": str(getattr(sig, "prompt", "") or ""),
-                 "priority": getattr(sig, "priority", "write") or "write"})
+                 "priority": getattr(sig, "priority", "write") or "write",
+                 "session_id": session_id,  # v10.5.0 (P1-8): 挂到 pending 供前端按会话过滤
+                 })
         except Exception:  # noqa: BLE001 — 投递失败视为拒绝(安全侧)
             log.warning("ApprovalBus 投递失败,按拒绝处理: %s", call.name)
             return False
         payload = {
+            "session_id": session_id,  # v10.5.0 (P1-8)
             "pin": pin,
             "tool": call.name,
             "args": call.args or {},
@@ -130,7 +147,7 @@ def _make_sse_emitting_approval_fn() -> Any:
         _buffer_approval_sse(pin, payload)
         # 推给正在监听的 /run_stream 生成器(无人消费则丢弃,超时 deny 兜底)
         try:
-            _approval_sse_queue().put_nowait(sse_text)
+            (approval_queue if approval_queue is not None else _approval_sse_queue()).put_nowait(sse_text)
         except Exception:  # noqa: BLE001
             pass
         decision = await bus.wait_decision_async(pin, timeout=_APPROVAL_TIMEOUT_SEC)
@@ -166,7 +183,7 @@ async def approval_decide(pin: str, req: ApprovalDecisionRequest) -> dict:
     "/approval/pending",
     dependencies=[Depends(require_auth)],
 )
-async def approval_pending() -> dict:
+async def approval_pending(session_id: Optional[str] = None) -> dict:
     """当前所有未决审批请求(供前端轮询 / SSE 首次连接推送)。
 
     Returns:
@@ -174,7 +191,11 @@ async def approval_pending() -> dict:
         每项字段来自 ApprovalBus.request_approval 登记的 ask 字典。
     """
     bus = get_approval_bus()
-    return {"pending": bus.pending_requests()}
+    items = bus.pending_requests()
+    # v10.5.0 (P1-8): 按 session 过滤(多窗口各自拉自己的待办)
+    if session_id:
+        items = [it for it in items if it.get("session_id") == session_id]
+    return {"pending": items}
 
 
 # ============================ backend 选择 ============================
@@ -518,12 +539,15 @@ async def _react_run_stream(
     session_id = session_id_param or uuid.uuid4().hex
     # P1-1:把用户输入同时给 _build_react_agent(供 roster/skills 按
     # 意图检索命中)与 run_turn(执行)。
+    # v10.5.0 (P1-7): 本请求私有的实时事件队列(审批 + phase 事件都进这里,
+    # 按请求隔离,多窗口不再互偷)。缺省旧行为:全局单例队列 + 忙轮询。
+    queue = _asyncio.Queue()
+    # 把用户输入同时给 _build_react_agent(供 roster/skills 按意图检索命中)
+    # 与 run_turn(执行)。
     agent, session, session_store = _build_react_agent(
-        request, session_id, job_id, text or "")
-    queue = _approval_sse_queue()
-    # P1-1:收集 run_turn 期间 TurnHooks 发出的 tool_result 人话事件,
-    # 在 done 前统一补发(简化实现:react 的 run_turn 阻塞在 task 中,
-    # phase 级实时投递需 hooks→queue 全链,本版先保证人话可见)。
+        request, session_id, job_id, text or "", event_queue=queue)
+    # 兼容契约:run_turn 期间产生的 tool_result 人话在 done 前统一补发
+    # (实时 tool_done 已覆盖,这里保留旧事件契约给既有前端/测试)。
     tool_human_events: list[str] = []
 
     async def _run_turn_and_save() -> Any:
@@ -534,28 +558,44 @@ async def _react_run_stream(
         return result
 
     turn_task = _asyncio.create_task(_run_turn_and_save())
+    sentinel = object()
+
+    def _on_turn_done(_t) -> None:
+        # run_turn 结束 → 放 sentinel 让 gen() 退出(替代旧 50ms 忙轮询)
+        try:
+            queue.put_nowait(sentinel)
+        except Exception:  # noqa: BLE001
+            pass
+
+    turn_task.add_done_callback(_on_turn_done)
 
     async def gen() -> AsyncIterator[str]:
+        # 直读:拿到实时事件(assistant_delta/tool_*/approval-request/supervise)
+        # 即 yield;收到 sentinel 结束。事件到来即时推送,不再轮询。
         while True:
-            if turn_task.done():
+            ev = await queue.get()
+            if ev is sentinel:
                 break
+            yield ev
+        # 终局排空(run_turn 完成瞬间与 sentinel 竞争的尾事件)
+        while True:
             try:
-                # 要么取到新审批事件(前端弹审批 UI),要么 50ms 超时后
-                # 重新检查 run_turn 是否已完成(stream 由此结束)。
-                ev = await _asyncio.wait_for(queue.get(), timeout=0.05)
-                yield ev
-            except _asyncio.TimeoutError:
+                ev = queue.get_nowait()
+            except _asyncio.QueueEmpty:
+                break
+            if ev is sentinel:
                 continue
-        # 终局排空(最后时刻 put 的审批事件)
-        while not queue.empty():
-            try:
-                yield queue.get_nowait()
-            except Exception:  # noqa: BLE001
-                break
-        result = turn_task.result()
-        # P1-1:从 session 事件里把工具调用翻成大白话(eli5),逐条补发
-        # tool_result 事件 —— 前端 agent 页把 human 渲染为 🔧 摘要行。
-        # 放 done 之前,保证执行结束即有人话回顾。
+            yield ev
+        # run_turn 异常不阻断 SSE:done 里如实带 error
+        try:
+            result = turn_task.result()
+        except Exception as e:  # noqa: BLE001
+            yield _sse("done", {
+                "done": True, "error": str(e),
+                "session_id": session_id, "reply": "",
+            })
+            return
+        # 兼容契约:从 session 事件里把工具调用翻成大白话(eli5)逐条补发
         try:
             from src.core.eli5 import explain_tool_call
             tool_calls: dict[str, dict] = {}
@@ -584,6 +624,7 @@ async def _react_run_stream(
             "session_id": session_id,
             "reply": result.final_text or "",
         })
+
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
@@ -847,6 +888,7 @@ def _build_react_agent(
     session_id: str,
     job_id: Optional[str],
     text: str = "",
+    event_queue: Any = None,  # v10.5.0 (P1-7): 本请求的实时 SSE 事件队列(缺省 None=旧全局队列行为)
 ) -> tuple:
     """构造 ReactLoopAgent + Session + SessionStore。
 
@@ -925,6 +967,10 @@ def _build_react_agent(
         sandbox=build_sandbox(),
         enabled=(os.environ.get("VAP_SANDBOX_ENABLED", "false").strip().lower()
                  in ("1", "true", "yes", "on")),
+        # v10.5.0 (P1-7): 审批事件进**本请求**队列(多窗口互不串台);
+        # 缺省 None 走进程级单例队列(旧行为,零回归)。
+        approval_fn=(_make_sse_emitting_approval_fn(event_queue, session_id)
+                     if event_queue is not None else None),
     )
 
     # 工具描述(供 system_prompt 用)
@@ -1007,14 +1053,86 @@ def _build_react_agent(
     if memory_connector is not None and not memory_connector.enabled:
         memory_connector = None
 
+    # v10.5.0 (P1-7): TurnHooks → 实时 SSE 事件流。
+    # 此前 _build_react_agent 不传 hooks,loop.py 的 phase 事件全部发射到默认
+    # no-op hooks —— 前端只能等 turn 结束才看到人话回顾(黑盒等待)。
+    # 现在把 ASSISTANT_STREAM / TOOL_CALL / TOOL_POST_EXECUTE / SUPERVISE
+    # 编码成 SSE 事件推进 event_queue,前端实现打字机 + 工具实时状态。
+    # event_queue 为 None 时 hooks=None → TurnHooks 默认(旧行为,零回归)。
+    hooks = None
+    if event_queue is not None:
+        from src.core.agent.turn import TurnHooks, TurnPhase
+
+        hooks = TurnHooks()
+
+        def _hook(phase_, make_event):
+            """构造 phase 钩子:把 ctx 编码成 SSE 文本并放入本请求队列。"""
+
+            async def _h(ctx):
+                try:
+                    ev = make_event(ctx)
+                    if ev:
+                        event_queue.put_nowait(ev)
+                except Exception:  # noqa: BLE001 — 事件投递失败不阻断 agent
+                    pass
+                return None
+
+            return _h
+
+        hooks.on(TurnPhase.ASSISTANT_STREAM, _hook(
+            TurnPhase.ASSISTANT_STREAM,
+            lambda ctx: _sse("assistant_delta", {
+                "delta": ctx.get("delta", ""),
+            }) if ctx.get("delta") else None))
+
+        hooks.on(TurnPhase.TOOL_CALL, _hook(
+            TurnPhase.TOOL_CALL,
+            lambda ctx: _sse("tool_start", {
+                "tool": (ctx.get("tool_call") or {}).get("name", ""),
+                "args": (ctx.get("tool_call") or {}).get("args", {}) or {},
+                "tool_call_id": (ctx.get("tool_call") or {}).get("id", ""),
+            }) if ctx.get("tool_call") else None))
+
+        def _tool_done(ctx):
+            call = ctx.get("call")
+            if call is None:
+                return None
+            tr = ctx.get("result")
+            return _sse("tool_done", {
+                "tool": getattr(call, "name", ""),
+                "tool_call_id": getattr(call, "call_id", ""),
+                "ok": not (tr is not None and tr.is_error()),
+                "error": getattr(tr, "error", None) if tr is not None else None,
+                "human": ctx.get("human") or "",
+            })
+
+        hooks.on(TurnPhase.TOOL_POST_EXECUTE, _hook(
+            TurnPhase.TOOL_POST_EXECUTE, _tool_done))
+
+        def _supervise(ctx):
+            kind = ctx.get("kind")
+            trigger = ctx.get("trigger")
+            return _sse("supervise", {
+                "kind": kind,
+                "describe": getattr(trigger, "describe", "") if trigger else "",
+            }) if kind else None
+
+        hooks.on(TurnPhase.SUPERVISE, _hook(
+            TurnPhase.SUPERVISE, _supervise))
+
+
     agent = ReactLoopAgent(
         AgentConfig(supervisor=Supervisor.from_env(),
                     system_prompt=system_prompt,
                     memory=memory_connector,
-                    max_steps=8),
+                    max_steps=8,
+                    # v10.5.0 (P1-10): 单步软超时由环境变量装配(缺省 None=零回归)。
+                    step_timeout_sec=_step_timeout_from_env(),
+        ),
         llm_client,
         registry,
         store=session_store,
+        hooks=hooks,  # v10.5.0 (P1-7): 实时事件流钩子(None=默认 no-op)
     )
     return agent, session, session_store
 

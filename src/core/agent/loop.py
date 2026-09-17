@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -56,7 +57,11 @@ class AgentConfig:
     Attributes:
         system_prompt: 系统提示词（Session 无 system 事件时可选注入）。
         max_steps: ReAct 循环步数上限（防失控）。
-        step_timeout_sec: 单步超时（None=不超时）。
+        step_timeout_sec: 单步软超时（None=不超时）。v10.5.0 (P1-10)
+            接线：LLM 流与工具执行都受该预算约束——LLM 超时终止整轮
+            (ERROR/step timeout)，工具超时落 tool_result Error 继续轮次
+            （交给 stuck 检测决定 pause/stop）。装配见 agent.py
+            `VAP_AGENT_STEP_TIMEOUT`。
         auto_tool_filter: 工具白名单（None=全部工具可用）。
         supervisor: 监督层（卡死/压缩/预算）。v10.3.1 起默认启用
             （`VAP_AGENT_SUPERVISOR=false` 显式关闭回退）。由主控装配时注入，
@@ -115,6 +120,64 @@ class MockLLMClient:
         chunk = self._script[self._idx]
         self._idx += 1
         yield chunk
+
+
+async def _bounded_stream(
+    agen: AsyncIterator[Any], sec: Optional[float],
+) -> AsyncIterator[Any]:
+    """给 LLM 异步生成器加**整体**超时(Python 3.10 兼容)。
+
+    v10.5.0 (P1-10)：`AgentConfig.step_timeout_sec` 的唯一消费点之一。
+    此前该字段是死配置——LLM 卡死只能靠 ProviderRouterClient 内部的
+    TimeoutError 被动兜底，单步无预算。语义：
+      - sec 为 None/<=0 → 直通(零回归)
+      - 3.11+ 用 asyncio.timeout(整体精确)
+      - 3.10 回退: 生产者任务 + 逐次 wait_for(近似整体)
+    超时统一抛 asyncio.TimeoutError，由调用方(loop.run_turn)转成
+    TurnStopReason.ERROR。
+    """
+    if sec is None or sec <= 0:
+        async for item in agen:
+            yield item
+        return
+
+    if sys.version_info >= (3, 11):
+        async with asyncio.timeout(sec):
+            async for item in agen:
+                yield item
+        return
+
+    # ---- Python 3.10 回退：生产者任务 + 事件队列 ----
+    queue: "asyncio.Queue" = asyncio.Queue(maxsize=1)
+    sentinel = object()
+
+    async def _produce() -> None:
+        try:
+            async for item in agen:
+                await queue.put(item)
+            queue.put_nowait(sentinel)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — 生产者异常经队列透传
+            queue.put_nowait(e)
+
+    task = asyncio.create_task(_produce())
+    try:
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=sec)
+            except asyncio.TimeoutError:
+                task.cancel()
+                raise
+            if item is sentinel:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+    finally:
+        if not task.done():
+            task.cancel()
+
 
 
 class ReactLoopAgent:
@@ -270,7 +333,11 @@ class ReactLoopAgent:
                 assistant_text = ""
                 final_tool_calls: list[dict[str, Any]] = []
                 try:
-                    async for chunk in self.llm.stream(messages, tools):
+                    # v10.5.0 (P1-10): LLM 流走整体软超时(step_timeout_sec)。
+                    # 3.11+ 用 asyncio.timeout 精确整体超时;3.10 回退逐事件近似。
+                    async for chunk in _bounded_stream(
+                            self.llm.stream(messages, tools),
+                            self.config.step_timeout_sec):
                         if chunk.delta_text:
                             assistant_text += chunk.delta_text
                             await turn.emit(TurnPhase.ASSISTANT_STREAM, {
@@ -317,7 +384,22 @@ class ReactLoopAgent:
                         await turn.emit(TurnPhase.TOOL_PRE_EXECUTE,
                                          {"call": call})
                         await turn.emit(TurnPhase.TOOL_EXECUTE, {"call": call})
-                        tr: ToolResult = await self.tools.execute(call)
+                        # v10.5.0 (P1-10): 工具执行受单步软超时约束。
+                        # 超时落 tool_result Error(不中断整轮),让 stuck 检测
+                        # 与用户审计看到"卡"在哪一步。
+                        if self.config.step_timeout_sec:
+                            try:
+                                tr: ToolResult = await asyncio.wait_for(
+                                    self.tools.execute(call),
+                                    timeout=self.config.step_timeout_sec)
+                            except asyncio.TimeoutError:
+                                tr = ToolResult(
+                                    call_id=call.call_id, name=call.name,
+                                    output=None,
+                                    error=f"tool timeout "
+                                          f"({self.config.step_timeout_sec}s)")
+                        else:
+                            tr: ToolResult = await self.tools.execute(call)
                         # v10.3.1 (P0-1 收尾):工具事件附一句大白话解释
                         # (eli5)。只进事件流供 UI 摘要行/黑匣子人话层渲染,
                         # **不进 LLM prompt**(避免 token 膨胀)。
