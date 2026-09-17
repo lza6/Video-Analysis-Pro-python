@@ -893,6 +893,27 @@ def _build_react_agent(
     except Exception as e:  # noqa: BLE001 — 可选工具面,失败不阻断 agent
         log.warning("media_gen/web_auto 工具注册失败(不阻断): %s", e)
 
+    # v10.4.0 (P0-3)：插件工具面 —— 把 PluginLoader 从「只在测试里出现过」
+    # 接到生产路径。插件（plugins/<name>/main.py 的 register(ctx)）往**同一个**
+    # registry 注册，因此插件工具与内置工具享有同一套 scope_guard 审批/sandbox
+    # 治理（写 ask / 危险写 ask 且超时拒绝）。
+    # 失败不阻断 agent（与 media_gen/web_auto 的防御性风格一致）。
+    plugin_ctx = None
+    try:
+        from src.core.plugins import PluginContext, PluginLoader, builtin_plugin_modules
+        from src.core.plugins.loader import DEFAULT_PLUGIN_DIR
+        plugin_ctx = PluginContext(registry)
+        plugin_loader = PluginLoader(plugin_ctx)
+        plugin_loader.load_builtin(builtin_plugin_modules())
+        loaded_plugins = plugin_loader.load_from_dir(
+            os.environ.get("VAP_PLUGIN_DIR", DEFAULT_PLUGIN_DIR))
+        request.app.state.plugin_loader = plugin_loader
+        if loaded_plugins:
+            log.info("已加载目录型插件: %s", ", ".join(loaded_plugins))
+    except Exception as e:  # noqa: BLE001 — 插件失败不阻断 agent
+        log.warning("插件加载失败(不阻断): %s", e)
+        plugin_ctx = None
+
     # v10.2 (B-ASSEMBLE):工具范围守卫装配(审批走 ApprovalBus + SSE,
     # 超时默认拒绝;sandbox 自动选型,VAP_SANDBOX_ENABLED 默认 false)。
     # approval_fn 走 SSE-emitting 实现:写工具 Ask 时把 approval-request
@@ -952,6 +973,17 @@ def _build_react_agent(
         context=None,
         active_skills=active_skills,
     )
+
+    # v10.4.0 (P0-3 补漏)：插件通过 ctx.append_system_prompt() 写入的片段
+    # 此前**没有任何消费者**——PluginContext 在这里就地构造、随函数返回被丢弃，
+    # system_prompt 只由 build_agent_system_prompt 产出。结果：插件声明的
+    # 「追加提示」是静默 no-op（插件只在测试里活着）。这里把它真正拼进去，
+    # 让 ctx.system_prompt 的拼装结果进入模型上下文。
+    if plugin_ctx is not None:
+        plugin_prompt = plugin_ctx.system_prompt
+        if plugin_prompt:
+            system_prompt = f"{system_prompt}\n\n{plugin_prompt}"
+            log.debug("已注入插件 system prompt 片段: %d 字符", len(plugin_prompt))
 
     # LLM adapter:桥接现有同步 cb
     cm = get_config_manager()
