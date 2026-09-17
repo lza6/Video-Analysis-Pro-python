@@ -6,14 +6,18 @@
   GET    /api/skills/state       → 全部启用状态 map
   POST   /api/skills/ratchet     → 对指定 skill 重跑评分棘轮(new/improved/rejected)
   POST   /api/skills/distill     → 对 ExperienceStore 聚合 >=3 次 intent 蒸馏草稿
+  GET    /api/skills/suggestions → 列出所有达阈值的 skill 建议(经验驱动)
 
 复用 src.skills(load_skills / set_enabled_state) + src/core/skill_generator。
 v10.2 (B-FIN-2 MAJOR-4):ratchet / distill 两个端点把 src/skills/scoring 与
 distiller 从「模块层」接到 HTTP 生产入口,skills 闭环有真实调用方。
+v10.4.0 (P0-2):suggestions 端点把 SkillAdvisor 从「零调用模块」接到生产入口,
+为「经验→建议→采纳」链路提供数据源(采纳 UI 见 P1-4)。
 """
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +29,13 @@ from ..security import require_auth
 log = logging.getLogger("web.skills")
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
+
+#: v10.4.0 (P0-2)：SkillAdvisor 建议开关（默认 1=开；0=端点返回空 + disabled 标记）
+_ENV_ADVISOR = "VAP_SKILLS_ADVISOR"
+
+
+def _advisor_enabled() -> bool:
+    return os.environ.get(_ENV_ADVISOR, "1").strip().lower() != "0"
 
 
 def _load_skills():
@@ -181,7 +192,11 @@ def distill_skill(req: DistillReq) -> dict:
             if not filtered:
                 return {"ok": False, "reason": f"intent {req.intent!r} 无经验记录"}
             experiences = filtered
-        draft = pipeline.distill(experiences, skills_dir=skill_dir) if experiences else None
+        # v10.4.0 (P0-1)：把已加载 skills 作为 existing 传入，让 validator 的
+        # 跨领域/排他性检查真正有对照物（此前 existing 为空，两项恒为通过）。
+        draft = (pipeline.distill(experiences, skills_dir=skill_dir,
+                                  existing=_load_skills())
+                 if experiences else None)
         if draft is None:
             return {"ok": False, "reason": "未达蒸馏阈值(>=3 次 + 稳定 tool_chain)"}
         return {
@@ -191,7 +206,61 @@ def distill_skill(req: DistillReq) -> dict:
             "chain": list(draft.chain),
             "skill_name": draft.draft.name,
             "markdown": draft.markdown,
+            # v10.4.0 (P0-1)：准入结果（admitted=False → 不建议进棘轮，但草稿仍返回）
+            "admitted": bool(getattr(draft, "admitted", True)),
+            "validation": getattr(draft, "validation_report", None),
         }
     except Exception as e:
         log.warning(f"distill skill failed: {e}")
         return {"ok": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# v10.4.0 (P0-2)：经验驱动的 skill 建议（SkillAdvisor 首次进入生产路径）
+# ---------------------------------------------------------------------------
+
+
+@router.get("/suggestions", dependencies=[Depends(require_auth)])
+def list_skill_suggestions(min_count: int = 3) -> dict:
+    """列出所有达到阈值的 skill 建议。
+
+    数据源：ExperienceStore 里**同类 intent ≥3 次且 tool_chain 稳定**的经验
+    （判定在 ``ExperienceStore.should_suggest_skill``）。每条建议带
+    ``recommended_tool_chain`` / ``sample_count`` / ``draft_skill_md``。
+
+    纯规则（skill_generator 场景模板），红线：不调付费 LLM。
+    ``VAP_SKILLS_ADVISOR=0`` → 返回空列表 + ``disabled=True``（零回归）。
+    """
+    if not _advisor_enabled():
+        return {"suggestions": [], "count": 0, "disabled": True}
+    try:
+        from src.core.agent.experience import ExperienceStore, SkillAdvisor
+        from src.skills.distiller import load_grouped_experiences
+        from src.utils.constants import CONFIG_DIR
+        import src.core.skill_generator as sg
+
+        store = ExperienceStore(Path(CONFIG_DIR) / "agent_experiences.db")
+        # 候选 intent 复用 distiller 的分组口径，保证两个端点看到同一批 intent
+        groups = load_grouped_experiences(store)
+        threshold = max(1, int(min_count))
+        out = []
+        for intent in sorted(groups):
+            raw_count = groups[intent].get("count", 0)
+            if not isinstance(raw_count, (int, float, str)):
+                continue
+            if int(raw_count) < threshold:
+                continue
+            suggestion = SkillAdvisor.suggest(store, intent, skill_generator=sg)
+            if suggestion is None:
+                continue
+            out.append({
+                "intent": suggestion.intent,
+                "recommended_tool_chain": list(suggestion.recommended_tool_chain),
+                "sample_count": int(suggestion.sample_count),
+                "has_draft": bool(suggestion.draft_skill_md),
+                "draft_skill_md": suggestion.draft_skill_md,
+            })
+        return {"suggestions": out, "count": len(out), "disabled": False}
+    except Exception as e:
+        log.warning(f"list skill suggestions failed: {e}")
+        return {"suggestions": [], "count": 0, "error": str(e)}
