@@ -20,9 +20,10 @@ class TestEli5VisualSearch:
 
 class TestEli5UnknownTool:
     def test_unknown_tool_fallback(self):
+        """未知工具：**明确告知缺口**，不再是旧的"返回了 N 字符"（假装正常）。"""
         out = explain_tool_call("mystery_tool", {"x": 1}, "abc" * 100)
         assert "mystery_tool" in out
-        assert "字符" in out
+        assert "尚未收录" in out
 
 
 class TestEli5ExceptionSafe:
