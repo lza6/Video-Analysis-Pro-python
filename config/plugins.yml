@@ -1,0 +1,19 @@
+# 声明式插件清单（config/plugins.yml）
+#
+# PluginLoader.load_from_specs() 按此列表顺序加载插件。
+# module 必须是**可 import** 的模块路径（与 plugins/<name>/main.py 的目录型插件不同，
+# 后者由 PluginLoader.load_from_dir() 扫描 VAP_PLUGIN_DIR 目录加载）。
+#
+# 示例（取消注释即可启用）：
+#
+# - id: video_analysis
+#   name: 视频分析插件
+#   enabled: true
+#   module: src.core.plugins.builtin.video_analysis
+#   config: {}
+#
+# 说明：内置插件（src/core/plugins/builtin/）也已由 load_builtin() 兜底加载，
+# 通常无需在此重复声明。
+#
+# 当前：无声明（空列表）——保持默认行为不变。
+[]

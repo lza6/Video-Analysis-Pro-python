@@ -1,0 +1,15 @@
+# 示例插件声明 —— 默认 enabled: false，不影响任何现有行为。
+#
+# 启用后你会得到两样东西（都是真实生效的，不是文档承诺）：
+#   1. 只读工具 example_hello 进入 agent 的 ToolRegistry（与内置工具同一套
+#      scope_guard 治理：读放行 / 写 ask）。
+#   2. system prompt 末尾追加一段说明（见 src/web/routers/agent.py 的插件段）。
+#
+# 启用方式：把 enabled 改成 true，重启后端。
+# 自查方式：GET /api/plugins → loaded 里应出现 example-hello，
+#           loaded_effects 里能看到 tool / system_prompt / setting 三条副作用。
+id: example-hello
+name: 示例插件（Hello）
+enabled: false
+config:
+  greeting: 你好

@@ -9,7 +9,12 @@ from src.core.plugins.context import (
     PluginState,
 )
 from src.core.plugins.patch import Plugin, PluginSpec, load_plugin_specs
-from src.core.plugins.loader import PluginLoader
+from src.core.plugins.loader import (
+    BUILTIN_PLUGIN_MODULES,
+    DEFAULT_PLUGIN_DIR,
+    PluginLoader,
+    builtin_plugin_modules,
+)
 from src.core.plugins.builtin.video_analysis import (
     VideoAnalysisPlugin,
     register as register_video_analysis_plugin,
@@ -24,6 +29,9 @@ __all__ = [
     "PluginSpec",
     "load_plugin_specs",
     "PluginLoader",
+    "BUILTIN_PLUGIN_MODULES",
+    "DEFAULT_PLUGIN_DIR",
+    "builtin_plugin_modules",
     "VideoAnalysisPlugin",
     "register_video_analysis_plugin",
     "VIDEO_ANALYSIS_PLUGIN_ID",
