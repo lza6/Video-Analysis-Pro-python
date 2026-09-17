@@ -19,9 +19,13 @@ echo [%time%] %~1 >> "%LOGFILE%"
 goto :eof
 
 :main
+rem --- 0. 从 desktop/package.json 读版本号(单一事实来源,随版本自动同步) ---
+for /f "usebackq delims=" %%v in (`node -p "require('./desktop/package.json').version"`) do set "APP_VERSION=%%v"
+if "%APP_VERSION%"=="" set "APP_VERSION=unknown"
+
 call :tee "========================================"
 call :tee "  TingFeng Hermes - Desktop (Electron)"
-call :tee "  v10.3.1"
+call :tee "  v!APP_VERSION!"
 call :tee "========================================"
 call :tee ""
 call :tee "Starting Electron desktop shell..."

@@ -30,6 +30,9 @@ CHANGELOG 顶部）。
 ``TODO:`` 残留。
 
 退出码：0=全通过；1=有失败。
+
+执行提示：全量 wiring 门在 CI 跑；本机快速验证用
+  `python scripts/check_wiring.py --check version,docs` 或 `pytest tests/test_check_wiring.py`。
 """
 from __future__ import annotations
 

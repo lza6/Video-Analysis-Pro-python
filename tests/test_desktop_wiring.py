@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -102,3 +103,57 @@ def test_desktop_js_syntax(filename: str):
         timeout=60,
     )
     assert proc.returncode == 0, f"{filename} 语法错误:\n{proc.stderr}"
+
+
+# --------------------------------------------------------------------------
+# 3) P0-B 启动脚本加固守卫（v10.5.0）：不误杀其他应用 + 版本单一事实来源
+# --------------------------------------------------------------------------
+
+
+def test_cleanup_stale_no_broad_electron_kill():
+    """cleanup-stale.js 不得再出现全机杀 Electron（taskkill /F /IM electron.exe）。"""
+    src = _read("cleanup-stale.js")
+    assert not re.search(r"taskkill\s+[/-]F\s+[/-]IM\s+electron", src, re.IGNORECASE), (
+        "出现全机杀 electron 写法，违反 P0-B 安全边界"
+    )
+
+
+def test_cleanup_stale_has_project_marker_filter():
+    """cleanup-stale.js 必须按本项目标识（路径/后端模块）精确匹配 PID。"""
+    src = _read("cleanup-stale.js")
+    assert "PROJECT_MARKER" in src
+    assert "selectProjectPids" in src
+    assert "src.web.serve" in src
+    assert "--dry-run" in src
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node 未安装")
+def test_cleanup_stale_node_selftest_passes():
+    """跑 desktop/test-cleanup-stale.js（纯函数单测：只匹配本项目，不误杀其他）。"""
+    proc = subprocess.run(
+        ["node", "test-cleanup-stale.js"],
+        cwd=str(DESKTOP),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=60,
+    )
+    assert proc.returncode == 0, f"cleanup-stale 单测失败:\n{proc.stdout}\n{proc.stderr}"
+    assert "checks passed" in proc.stdout
+
+
+def test_start_desktop_bat_version_not_hardcoded():
+    """start-desktop.bat 横幅不得硬编码版本号，必须读 desktop/package.json。"""
+    bat = (PROJECT_ROOT / "start-desktop.bat").read_text(encoding="utf-8", errors="ignore")
+    assert "v10.3.1" not in bat, "版本号硬编码回潮"
+    assert "APP_VERSION" in bat and "package.json" in bat
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node 未安装")
+def test_cleanup_stale_js_syntax():
+    proc = subprocess.run(["node", "--check", "cleanup-stale.js"], cwd=str(DESKTOP),
+                          capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=60)
+    assert proc.returncode == 0, f"cleanup-stale.js 语法错误:\n{proc.stderr}"
+
