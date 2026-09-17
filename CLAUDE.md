@@ -206,6 +206,8 @@ CI 在打 `v*` tag 时触发 `build-windows` job 跑全量测试 + electron-buil
 | `VAP_NV_API_KEYS` | NVIDIA 11 key 逗号分隔，provider_router 多 key 轮换 |
 | `VAP_NV_BACKOFF_SEC` | 503 退避秒数（默认 1.5） |
 | `VAP_NV_MAX_CONCURRENT_PER_KEY` | 单 key 并发上限（默认 2） |
+| `VAP_AGENT_STEP_TIMEOUT` | Agent 单步软超时（秒；空/0=不超时，缺省 None 零回归；v10.5.0 P1-10） |
+| `VAP_AGENT_APPROVAL_TIMEOUT` | 审批超时秒数（默认 60；前端倒计时与超时 deny 兜底） |
 | `VAP_MONITOR_DIR` | 监控目录 |
 | `VAP_KEY_ITEM_IMAGE` | 关键物品参考图 |
 | `VAP_RTSP_URL` | RTSP 流地址 |

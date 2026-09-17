@@ -1,5 +1,46 @@
 # Changelog — TingFeng Hermes
 
+## [10.5.0] — 2026-09-18 · 对话体验闭环 + 单步软超时 + 启动脚本安全加固
+
+### P1-10 单步软超时接线（step_timeout_sec 死配置转正）
+- `AgentConfig.step_timeout_sec`（loop.py）此前是**死配置**（定义+文档齐全但从未被消费）。现接线：
+  - LLM 流整体超时（3.11+ `asyncio.timeout` 精确；3.10 回退生产者+队列近似）→ `ERROR(step timeout)` 终止整轮；
+  - 工具执行超时 → tool_result 落 `Error: tool timeout (Ns)`，**轮次继续**（交给 stuck 检测/用户审计）。
+- 装配：`VAP_AGENT_STEP_TIMEOUT`（秒），缺省 None 零回归（`.env.example` 已加）。
+- 新增 `tests/test_step_timeout.py`（5 用例：LLM 超时/工具超时/预算内/缺省回归/env 解析）。
+
+### P1-7 react 实时事件流（对话从"黑盒等待"变"实时可见"）
+- `_build_react_agent` 接 TurnHooks → 事件队列：`assistant_delta`（打字机）/ `tool_start` / `tool_done` /
+  `supervise` 实时推 SSE（此前 phase 事件发射到默认 no-op hooks，前端只能等 turn 结束才看到人话回顾）。
+- `/run_stream` 改**每请求独立队列** + sentinel 直读（移除 50ms 忙轮询）；run_turn 异常在 `done` 里如实带 error。
+- 前端 agent 页：流式打字机 + 工具实时状态行 + 监督提示；`tool_result` 兼容补发按 tool_call_id 去重。
+- 新增 `tests/test_agent_realtime_stream.py`（实时事件断言 + 双 session 隔离 + 审批队列路由）。
+
+### P1-8 审批体验闭环
+- 审批事件带 `session_id` 且进**本请求**队列（多窗口不再互偷）；`GET /api/agent/approval/pending?session_id=…` 过滤。
+- 前端审批弹窗：**实时倒计时**（归零自动拒绝）、**Enter=允许 / Esc=拒绝**（排除中文输入法组字）。
+- 工具中文名/后果映射抽到 `webapp/src/lib/approvalMaps.ts`，后端测试动态守护（新增写工具忘映射即红）。
+
+### P1-9 会话管理 UI
+- Agent 页会话条：**新建/切换/删除**历史会话；run_stream 落库后列表自动刷新；历史会话从 SessionEvent 重建对话。
+
+### P0-B 启动脚本加固（安全修复）
+- `desktop/cleanup-stale.js` 不再 `taskkill /IM electron.exe` **全机杀** Electron：按进程命令行精确匹配本项目
+  （含 `--dry-run` 复核模式）；端口 8000-8019 清理同样按项目标识过滤（不误杀其他 python）。
+- `start-desktop.bat` 横幅版本号改读 `desktop/package.json`（不再硬编码 v10.3.1）。
+- 守卫：`tests/test_desktop_wiring.py` +5 用例；`desktop/test-cleanup-stale.js` 纯函数单测（3 命中/3 排除/2 边界）。
+
+### P0-C 检查脚本说明
+- `scripts/check_wiring.py` 文档标注本机快速验证命令（`--check version,docs` / `pytest tests/test_check_wiring.py`），全量 wiring 门归 CI。
+
+### 验证（本会话实测）
+- 新增后端测试：step_timeout 5 + realtime 5 + react/agent 路由回归 45 + 既有契约 43/65/15 全绿。
+- Playwright E2E：既有 24 passed + 新 `agent-realtime.spec.ts` 3 passed（实时事件/会话落库/会话管理 UI）。
+- 前端 `tsc --noEmit` 0 错误；`next build` 17 路由全部成功。
+- CI（tag 触发）全量测试 + 覆盖率门禁 77%（P0-8 基线）。
+- 注：CI 历史全红根因（test/e2e/build 三 job 缺 `requirements-web.txt` 导致 `ModuleNotFoundError: fastapi`）
+  已随本版本修复（commit 3509dad）。
+
 ## [10.4.0] — 2026-09-15 · 交付闭环收尾 + 启动性能急救（P0 批次）
 
 ### P0-6 启动性能急救（本次最大收益：**29.18s → 1.42s，20.6×**）
