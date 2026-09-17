@@ -105,10 +105,10 @@ class TestEli5Templates:
         assert "最像的是" in out
 
     def test_unknown_tool_degrades_gracefully(self):
-        """未知工具退化为通用文案，不崩。"""
+        """未知工具退化为"明确告知缺口"的兜底文案，不崩。"""
         out = explain_tool_call("mystery_tool", {"x": 1}, "abc" * 100)
         assert "mystery_tool" in out
-        assert "字符" in out
+        assert "尚未收录" in out
 
     def test_result_is_exception_does_not_crash(self):
         """result 是 Exception 时标"出错了"，不抛。"""

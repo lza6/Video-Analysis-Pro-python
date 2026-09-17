@@ -329,7 +329,22 @@ class BatchRunner:
         # 读视频时长
         duration = self._probe_duration(video)
         if duration <= 0:
-            self.error.emit(f"无法读取 {video.name} 时长，跳过")
+            # v10.4.0：此前这里只 emit 一条信号就 return 0 —— 在 **run 列表里**
+            # 这条视频完全不出现，用户看到的是「批次完成、0 命中」，与「真的没
+            # 匹配到」无法区分（审计中在真实监控目录上复现：截断/容器损坏的 mp4
+            # 让 cv2/ffprobe/ffmpeg 三条回退全部拿不到时长，整个批次静默空跑）。
+            # 现落一条 status=failed 的 run + 原因，让失败可见可追溯。
+            reason = f"无法读取视频时长（文件损坏或容器元信息缺失），跳过：{video.name}"
+            self.error.emit(reason)
+            try:
+                run_id = self.run_store.create_run(
+                    str(video), duration_sec=None, model=self.config.model,
+                    provider="nvidia", mode="batch_surveillance", status="failed",
+                )
+                self.run_store.update_run(
+                    run_id, error=reason, segments_total=0, segments_failed=0)
+            except Exception as e:  # noqa: BLE001 — 落库失败不该阻断批次
+                logger.warning(f"[batch] 不可读视频落库失败 {video.name}: {e}")
             return 0
 
         # 断点续跑：若 video_path 已有 run 且 status=started/running，复用 run_id

@@ -769,35 +769,41 @@ def test_eli5_visual_search_templates():
 def test_eli5_get_frame_and_highlights():
     from src.core.eli5 import explain_tool_call
     assert "12" in explain_tool_call("get_frame_details", {"seconds": 12}, "x")
+    # P0-5：模板名从错误的 create_highlights 改为真实工具名 highlight_cut
     # 失败分支：head 含"未找到" → 真实文案"没找到足够的相关片段"（含"相关片段"）
     assert "相关片段" in explain_tool_call(
-        "create_highlights", {"description": "狗"}, "未找到相关片段")
+        "highlight_cut", {"description": "狗"}, "未找到相关片段")
     # 成功分支：真实文案"挑了 3 个最相关的片段"
     assert "3 个最相关" in explain_tool_call(
-        "create_highlights", {"description": "狗"}, "成功生成 3 段")
+        "highlight_cut", {"description": "狗"}, "成功生成 3 段")
 
 
 def test_eli5_kb_and_ocr_and_web():
     from src.core.eli5 import explain_tool_call
-    assert "0 个" in explain_tool_call("search_kb", {"query": "q"},
-                                       "知识库中没有匹配结果")
+    assert "没有找到" in explain_tool_call("search_kb", {"query": "q"},
+                                          "知识库中没有匹配结果")
     assert "找到 2 个" in explain_tool_call("search_kb", {"query": "q"},
                                            "1. a\n2. b")
-    assert "认出 2 行" in explain_tool_call("run_ocr", {"path": "/f.jpg"},
-                                           "hello world")
-    assert "认出 0 行" in explain_tool_call("run_ocr", {"seconds": 3}, "No text found")
+    # P0-5：模板名从错误的 run_ocr 改为真实工具名 ocr_frame；
+    # 且真实入参是 seconds（旧模板误用 args['path']）
+    assert "认出了" in explain_tool_call("ocr_frame", {"seconds": 2},
+                                        "hello world")
+    assert "没有认出" in explain_tool_call("ocr_frame", {"seconds": 3},
+                                          "No text detected")
     assert "2 条结果" in explain_tool_call("search_web", {"query": "q"},
                                            json.dumps([{"t": "a"}, {"t": "b"}]))
-    assert "网上搜'q'" in explain_tool_call("search_web", {"query": "q"},
-                                            "not json")
+    assert "网上搜" in explain_tool_call("search_web", {"query": "q"},
+                                        "not json")
 
 
 def test_eli5_video_meta_and_jump_and_delete():
     from src.core.eli5 import explain_tool_call
     assert "12.5" in explain_tool_call("get_video_meta", {},
                                        json.dumps({"duration": 12.5}))
-    assert "7" in explain_tool_call("point_and_jump", {}, "跳到 7.2s 处")
-    assert "删除" in explain_tool_call("delete_this_history", {}, "x")
+    # P0-5：真实工具名是 point_at_object（旧模板名 point_and_jump 从未命中）
+    assert "7" in explain_tool_call("point_at_object", {}, "跳到 7.2s 处")
+    # P0-5：真实工具名是 delete_history（旧模板名 delete_this_history 从未命中）
+    assert "删除" in explain_tool_call("delete_history", {}, "x")
 
 
 def test_eli5_exception_and_unknown():
@@ -805,7 +811,7 @@ def test_eli5_exception_and_unknown():
     out = explain_tool_call("search_visual", {"query": "q"}, ValueError("网络断了"))
     assert "出错了" in out and "网络断了" in out
     out2 = explain_tool_call("mystery_tool", {"x": 1}, "abc")
-    assert "mystery_tool" in out2 and "3 字符" in out2
+    assert "mystery_tool" in out2 and "尚未收录" in out2
 
 
 # ===========================================================================

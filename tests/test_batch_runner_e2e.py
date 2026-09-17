@@ -37,16 +37,38 @@ class TestBatchRunnerRealE2E:
         from src.core.run_store import RunStore
 
         _load_env()
-        api_key = os.environ["VAP_NV_API_KEY"]
+        # v10.4.0：这是**真实外部 API** 用例，缺依赖时必须是 skip 而非 fail ——
+        # 否则本地/CI 全量跑会出现“环境性红”，掩盖真实回归（本次审计即遇到）。
+        api_key = os.environ.get("VAP_NV_API_KEY")
+        if not api_key:
+            pytest.skip("需要真实 NVIDIA key（VAP_NV_API_KEY）；显式运行: pytest -m real_api")
         monitor_dir = os.environ.get("VAP_MONITOR_DIR", "D:/监控")
         key_item = os.environ.get("VAP_KEY_ITEM_IMAGE",
                                   f"{monitor_dir}/关键物品.jpg")
+        if not Path(monitor_dir).is_dir():
+            pytest.skip(f"监控目录不存在: {monitor_dir}（真实 E2E 需要本地视频样例）")
         # 找第 1 个 mp4
         videos = sorted([f for f in Path(monitor_dir).iterdir()
                          if f.suffix.lower() == ".mp4"])
-        assert videos, f"监控目录无 mp4: {monitor_dir}"
+        if not videos:
+            pytest.skip(f"监控目录无 mp4: {monitor_dir}")
         video = videos[0]
         print(f"E2E 使用视频: {video.name}")
+
+        # v10.4.0：真实 E2E 需要**可读**的样例。监控目录里的原始 dump 常有
+        # 容器损坏/截断的 mp4（ffmpeg 报 "duration not set"，三条时长探测
+        # 全部拿不到）——这种文件走不到「发真实请求」这一步，属于环境前置
+        # 不满足，应 skip 而不是 fail（否则真回归会被环境噪声掩盖）。
+        probe_cfg = BatchConfig(
+            video_dir=str(monitor_dir), key_item_image=key_item,
+            item_description="关键物品", segment_sec=30, clip_padding=10,
+            clean_segments=True, resume=False, out_dir=str(tmp_path / "probe"),
+            request_timeout=30)
+        probe = BatchRunner(probe_cfg, RunStore(str(tmp_path / "probe_cfg")), None)
+        if probe._probe_duration(video) <= 0:
+            pytest.skip(
+                f"样例视频不可读（容器损坏/无时长元信息）: {video.name}；"
+                "真实 E2E 请用可读 mp4（VAP_MONITOR_DIR 指向含健康样例的目录）")
 
         # 构造 router（单 key）
         keys = [ProviderKey(

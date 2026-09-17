@@ -374,6 +374,60 @@ class TestErrorHandling:
         run = store.get_run(runs[0]["run_id"])
         assert run["segments"][0]["status"] == "failed"
 
+    def test_unreadable_video_records_visible_failed_run(self, tmp_path):
+        """v10.4.0：视频不可读必须**留下一条 failed run**，不能静默 return 0。
+
+        真实审计发现（本机监控目录 D:/监控）：容器损坏/截断的 mp4 让
+        cv2 + ffprobe + ffmpeg 三条回退全拿不到时长 → 旧实现只 emit 一个信号就
+        return，run 列表里**完全不出现这条视频**，用户看到「批次完成、0 命中」，
+        与「真的没匹配到」无法区分 —— 静默失败比报错更危险。
+        """
+        # Arrange：字节垃圾冒充 mp4（不可读 + 无时长）
+        store = _make_store(tmp_path)
+        router = _make_router(match=False)
+        cfg = _make_config(tmp_path)
+        bad = tmp_path / "broken.mp4"
+        bad.write_bytes(b"not-a-real-mp4" * 100)
+
+        runner = BatchRunner(cfg, store, router)
+        errors = []
+        runner.error.connect(lambda msg: errors.append(msg))
+
+        # Act
+        runner.run_batch([bad])
+
+        # Assert：留痕（failed run + 原因），且未发任何 LLM 请求
+        runs = store.list_runs()
+        assert len(runs) == 1, "不可读视频必须留下 run 记录（不能静默消失）"
+        run = store.get_run(runs[0]["run_id"])
+        assert run["status"] == "failed"
+        assert "无法读取视频时长" in (run.get("error") or "")
+        assert run["video_name"] == "broken.mp4"
+        assert errors, "error 信号应携带原因"
+        router.post_nvidia.assert_not_called()
+
+    def test_unreadable_video_does_not_block_other_videos(self, tmp_path):
+        """一条坏视频不能拖垮整批：可读视频仍然正常分析。"""
+        store = _make_store(tmp_path)
+        router = _make_router(match=False)
+        cfg = _make_config(tmp_path)
+        good = _make_video(tmp_path, "good.mp4", duration_sec=2)
+        bad = tmp_path / "broken.mp4"
+        bad.write_bytes(b"junk" * 50)
+
+        runner = BatchRunner(cfg, store, router)
+
+        # Act
+        runner.run_batch([bad, good])
+
+        # Assert：2 条 run（1 failed + 1 done），各归各的
+        runs = store.list_runs()
+        by_status = {r["status"] for r in runs}
+        assert by_status == {"failed", "done"}, by_status
+        good_run = next(store.get_run(r["run_id"]) for r in runs
+                        if r["video_name"] == "good.mp4")
+        assert good_run["segments"][0]["status"] in ("ok", "failed")
+
 
 # ----------------------------------------------------------------------
 # 6. v5.8 断点 B1/B2/B6：per-model 配置 / 档位映射 / 回调注入

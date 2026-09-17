@@ -11,8 +11,6 @@ import threading
 import time
 from pathlib import Path
 
-import cv2
-
 from src.core.logic import (
     VideoProcessor,
     AudioProcessor,
@@ -28,8 +26,17 @@ log = logging.getLogger("web.analyzer")
 
 
 def _probe_duration(video_path: Path) -> float:
-    """用 OpenCV 探测视频时长(秒)。复用 headless.py 的逻辑。"""
+    """用 OpenCV 探测视频时长(秒)。复用 headless.py 的逻辑。
+
+    v10.4.0：cv2 改为函数内延迟 import。它此前是本模块顶层 import，
+    而 analyzer_service 又被 web.app 顶层引用 —— 后端冷启动因此背上了
+    cv2 的 ~0.36s 导入代价（importtime 实测），尽管分析任务真正开始前
+    根本用不到它。函数内 import 在 CPython 只有一次模块查找开销，
+    之后走 sys.modules 缓存，热路径无感。
+    """
     try:
+        import cv2  # 延迟 import：见 docstring（启动性能 P0-6）
+
         cap = videocapture_unicode(video_path)
         if not cap.isOpened():
             return 0.0

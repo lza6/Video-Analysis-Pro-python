@@ -15,6 +15,29 @@ except OSError:
     pass
 
 
+@pytest.fixture(autouse=True)
+def _reset_ip_rate_limiter():
+    """每个测试前后重置进程级 IP 限流器（v10.4.0 修测试隔离缺陷）。
+
+    WHY: `src/web/security.py` 的 `_ip_limiter` 是**进程级全局**，60s 滑动窗口。
+    一个 pytest 进程里跑几十个文件时，同一 IP（TestClient 固定为 'testclient'）
+    的请求会累积，默认上限 10 req/min 被击穿 → 后续用例收到 429，表现为
+    “随机失败”（单独跑该文件却全绿）。
+
+    这是**测试隔离缺陷**，不是被测代码的 bug：限流本身是预期行为。重置后
+    用例结果与执行顺序无关；专门测限流的用例会自己调 `init_ip_limiter`，
+    不受影响。
+    """
+    try:
+        from src.web import security as _security
+    except Exception:  # noqa: BLE001 — 导入失败不该拖垮整个测试会话
+        yield
+        return
+    _security._ip_limiter = None
+    yield
+    _security._ip_limiter = None
+
+
 @pytest.fixture(scope="session")
 def qapp():
     """占位 fixture(已无 PyQt6 依赖)。

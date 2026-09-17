@@ -88,11 +88,16 @@ class RunStore:
                     model              TEXT,
                     provider           TEXT,
                     mode               TEXT,
-                    strip_path         TEXT
+                    strip_path         TEXT,
+                    error              TEXT
                 )
             """)
             # v5.7：旧库补 strip_path 列（长图证据路径）
             self._ensure_column(conn, "runs", "strip_path", "TEXT")
+            # v10.4.0：旧库补 error 列 —— 让「视频本身不可读」这类失败有地方
+            # 落原因（此前 batch_runner 直接 return 0，用户只看到「0 命中」，
+            # 与「真的没匹配到」无法区分）
+            self._ensure_column(conn, "runs", "error", "TEXT")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS segments (
                     seg_id        TEXT PRIMARY KEY,
@@ -244,6 +249,7 @@ class RunStore:
             "started_at", "finished_at", "hits_count", "segments_total",
             "segments_ok", "segments_failed", "vlm_elapsed_sec",
             "total_elapsed_sec", "model", "provider", "mode", "strip_path",
+            "error",
         }
         if "status" in fields and fields["status"] not in _RUN_STATUS_VALUES:
             raise ValueError(
