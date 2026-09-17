@@ -21,7 +21,8 @@ pandas<3                         # seaborn 依赖；pandas 3.x 要求 numpy>=2.3
 # --- AI core ---
 torch>=2.2
 faster-whisper>=1.0.0
-sentence-transformers>=2.3.0     # 2.2.2 与新版 huggingface_hub 不兼容
+sentence-transformers>=2.3.0,<7.0  # 2.2.2 与新版 huggingface_hub 不兼容
+transformers>=4.41,<5.17            # 5.17.0 破坏 KB/CLIP 惰性导入(PreTrainedModel),CI 3.10 实测;5.16.1 全过
 keyring>=24.0.0                  # API Key OS 密钥环存储 (DPAPI/Keychain)，否则降级明文 ini
 
 # --- Persistence / utils ---

@@ -48,10 +48,16 @@ class TestFilenameSanitization:
 
     @staticmethod
     def _sanitize(filename: str) -> str:
-        """复现 run_analysis 内的清洗逻辑做纯函数验证。"""
-        safe = Path(filename).name or "upload.mp4"
+        """直接调真实实现(src/web/security.secure_basename)——避免镜像逻辑漂移。
+
+        v10.5.0 修复:旧镜像用 Path().name 在 Linux 上不剥反斜杠路径
+        (C:\\evil.mp4 原样返回),而真实实现已改为跨平台双分隔符剥离。
+        """
+        from src.web.security import secure_basename
+        safe = secure_basename(filename) or "upload.mp4"
         ALLOWED = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".webm", ".wmv", ".ts"}
-        if Path(safe).suffix.lower() not in ALLOWED:
+        suffix = safe[safe.rfind("."):].lower() if "." in safe else ""
+        if suffix not in ALLOWED:
             safe = "upload.mp4"
         return safe
 
