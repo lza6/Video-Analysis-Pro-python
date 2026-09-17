@@ -210,6 +210,9 @@ def test_torch_is_lazy_proxy_before_use():
     """模块级 torch 是惰性代理，尚未触发真实 import。"""
     import src.core.logic as logic
 
+    # 全量测试进程里其他用例可能已触发真实加载(如 test_b_fin2 monkeypatch
+    # torch.cuda),先复位再看"初始未加载"语义——本用例关心的是代理结构本身。
+    logic.torch._mod = None
     assert isinstance(logic.torch, logic._LazyModule)
     assert logic.torch._mod is None  # 未加载
 

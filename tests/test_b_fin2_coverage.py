@@ -879,6 +879,12 @@ def tk_root():
         pass
 
 
+def _tk_headless() -> bool:
+    """Linux 无 DISPLAY 时 Tk 无法建窗(CI 矩阵 ubuntu 报 TclError: no display name)。"""
+    return sys.platform.startswith("linux") and not os.environ.get("DISPLAY")
+
+
+@pytest.mark.skipif(_tk_headless(), reason="headless CI: Tk 需要 DISPLAY")
 class TestUiComponentsTk:
     def test_initial_theme_dialog_construct_and_confirm(self, tk_root, monkeypatch):
         import tkinter as tk

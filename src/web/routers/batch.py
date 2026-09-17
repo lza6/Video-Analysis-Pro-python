@@ -89,6 +89,14 @@ def start_batch(req: BatchRunReq, request: Request) -> dict:
 
     loop = request.app.state.analyzer_service._loop
 
+    # v10.5.0 (CI 实测):空目录校验必须在装配 runner 之前 —— 无 nvidia key 时
+    # _build_runner 抛 RuntimeError(500),用户应看到干净的 400「目录无支持的视频文件」。
+    # 校验顺序:目录存在 → 有视频 → 再装配 runner。
+    videos = sorted([p for p in video_dir.iterdir()
+                     if p.suffix.lower() in (".mp4", ".avi", ".mov", ".mkv")])
+    if not videos:
+        raise HTTPException(status_code=400, detail={"error": "目录无支持的视频文件"})
+
     with _lock:
         # 取消旧 runner
         if _runner is not None:
@@ -97,11 +105,6 @@ def start_batch(req: BatchRunReq, request: Request) -> dict:
             except Exception:
                 pass
         _runner = _build_runner(req, store)
-
-    videos = sorted([p for p in video_dir.iterdir()
-                     if p.suffix.lower() in (".mp4", ".avi", ".mov", ".mkv")])
-    if not videos:
-        raise HTTPException(status_code=400, detail={"error": "目录无支持的视频文件"})
 
     def worker():
         try:

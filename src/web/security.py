@@ -213,12 +213,27 @@ def sanitize_relative_path(raw: str, category: str, allowed_exts: frozenset[str]
     return resolve_within_root(root, raw, allowed_exts)
 
 
+def secure_basename(raw: str) -> str:
+    """跨平台安全基名：同时剥离 `/` 与 `\\` 分隔符。
+
+    关键：`pathlib.Path(raw).name` 在 Linux 上**不认反斜杠**——
+    `Path("C:\\evil.mp4").name` 返回整个字符串，`..\\x.mp4` 也不会被
+    剥成 `x.mp4`。攻击者传 Windows 风格路径就能在 Linux 服务端逃逸
+    写到任意子路径。这里用纯字符分割（不依赖宿主 OS 的路径语义）。
+    """
+    if not raw:
+        return ""
+    return raw.replace("\\", "/").rsplit("/", 1)[-1]
+
+
 def sanitize_upload_filename(raw: str) -> str:
     """把 multipart 上传的 filename 消毒成安全基名。
 
     复用 headless.py 的逻辑:取 basename 防逃逸,扩展名非白名单则改名。
     """
-    base = Path(raw).name or "upload.mp4"
-    if Path(base).suffix.lower() not in ALLOWED_VIDEO_EXTS:
+    base = secure_basename(raw) or "upload.mp4"
+    # 扩展名白名单(小写比较),非白名单一律改名为 upload.mp4
+    suffix = base[base.rfind("."):].lower() if "." in base else ""
+    if suffix not in {e.lower() for e in ALLOWED_VIDEO_EXTS}:
         base = "upload.mp4"
     return base

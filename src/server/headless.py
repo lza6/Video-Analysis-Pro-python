@@ -107,10 +107,12 @@ def run_analysis(video_bytes: bytes, filename: str, model: str = "qwen2.5:3b") -
     workdir = TMP_ROOT / job_id
     # 安全消毒：filename 来自客户端 multipart，取 basename 防止 "..\\x.mp4" / "C:\\evil.mp4"
     # 逃逸 workdir 写任意路径（commit 213cf57 声称已修但实际未落地，Critic 轮1 M3 补齐）。
-    safe_name = Path(filename).name or "upload.mp4"
+    from src.web.security import secure_basename
+    safe_name = secure_basename(filename) or "upload.mp4"
     # 扩展名白名单：只允许常见视频容器，防 .exe/.py 等可执行写入（audit-prod P0-3 收紧）
     _ALLOWED_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".webm", ".wmv", ".ts"}
-    if Path(safe_name).suffix.lower() not in _ALLOWED_EXTS:
+    suffix = safe_name[safe_name.rfind("."):].lower() if "." in safe_name else ""
+    if suffix not in _ALLOWED_EXTS:
         safe_name = "upload.mp4"
     video_path = workdir / safe_name
     workdir.mkdir(parents=True, exist_ok=True)
