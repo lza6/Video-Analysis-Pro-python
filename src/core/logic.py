@@ -9,7 +9,6 @@ import requests
 import cv2
 import threading
 import numpy as np
-import torch
 from collections import Counter
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -24,15 +23,55 @@ import importlib.util as _ilu
 
 
 def _probe(module: str) -> bool:
-    return _ilu.find_spec(module) is not None
+    """只探测模块是否可导入，不真实绑定（不触发模块级副作用）。"""
+    try:
+        return _ilu.find_spec(module) is not None
+    except (ImportError, ValueError):
+        return False
 
+
+class _LazyModule:
+    """惰性模块代理：首次属性访问时才真实 import。
+
+    WHY: torch / sentence_transformers 的 import 代价极高（本机实测 4.2s / 19.0s）。
+    若在模块顶层真实 import，每次后端进程启动都要付这份代价——实测
+    `import src.web.app` 冷启动 29.2s，其中约 23s 来自这两个包。
+    代理保持 `torch.xxx` 的既有调用写法不变，只把真实的 import 时刻推迟到
+    首次使用：语义不变（首次使用时抛同样的 ImportError），启动不再被拖慢。
+    """
+
+    __slots__ = ("_name", "_mod")
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._mod = None
+
+    def _load(self):
+        if self._mod is None:
+            import importlib
+            self._mod = importlib.import_module(self._name)
+        return self._mod
+
+    def __getattr__(self, item):
+        return getattr(self._load(), item)
+
+
+def _sentence_transformers_util():
+    """惰性加载 sentence_transformers.util（该包 import 单次实测 19s）。
+
+    历史坑：此处曾在模块顶层 `from sentence_transformers import util`，为了算一个
+    布尔标志 CLIP_AVAILABLE 让每次进程启动多付 19s（v10.4.0 P0-6 修复）。
+    """
+    import importlib
+    return importlib.import_module("sentence_transformers.util")
+
+
+# torch 走惰性代理（详见 _LazyModule 注释）——调用处写法保持不变。
+torch = _LazyModule("torch")
 
 SCENEDETECT_AVAILABLE = _probe("scenedetect")
-try:
-    from sentence_transformers import util  # noqa: F401  (used by semantic_search / kb_indexer)
-    CLIP_AVAILABLE = True
-except ImportError:
-    CLIP_AVAILABLE = False
+# 与同文件 SCENEDETECT_AVAILABLE / DECORD_AVAILABLE 保持一致的"只探测不绑定"写法。
+CLIP_AVAILABLE = _probe("sentence_transformers")
 
 DECORD_AVAILABLE = _probe("decord")
 try:
@@ -62,17 +101,18 @@ def check_cuda_health() -> bool:
 def _detect_advanced_features() -> bool:
     """Probe the lazy-loaded Phase-3 dependencies for real availability.
 
-    Historical bug: this used to be `try: pass; FLAG=True except ...`, so the
+    Historical bug 1: this used to be `try: pass; FLAG=True except ...`, so the
     flag was always True and Phase 3 crashed at runtime instead of being
     disabled up front.
+
+    Historical bug 2 (v10.4.0 P0-6): 上一版为了算这个 flag 真的 import 了
+    moviepy / matplotlib.pyplot / seaborn —— 仅 seaborn 就会连带
+    scipy.stats + pandas（实测 ~0.9s），全部计入每次进程启动。
+
+    现在用 find_spec 做真实探测：仍是“探测”（不是硬编码 True），flag 可信度
+    不降；真实 import 交给使用点（Phase 3 调用处已有 try/except 降级）。
     """
-    import importlib
-    for module in ("moviepy", "matplotlib.pyplot", "seaborn"):
-        try:
-            importlib.import_module(module)
-        except Exception:
-            return False
-    return True
+    return all(_probe(m) for m in ("moviepy", "matplotlib.pyplot", "seaborn"))
 
 ADVANCED_FEATURES_AVAILABLE = _detect_advanced_features()
 
@@ -362,12 +402,14 @@ class VideoProcessor:
                         pass
             import torch as _torch
             embeddings = _torch.cat(embeddings_list) if embeddings_list else model.encode([], convert_to_tensor=True)
+            # 惰性拿 util（模块级不再绑定 sentence_transformers，见文件头注释）
+            clip_util = _sentence_transformers_util()
             
             keep_indices = [0] # Keep the first frame
             for i in range(1, len(frames)):
                 is_duplicate = False
                 for j in keep_indices:
-                    sim = util.cos_sim(embeddings[i], embeddings[j]).item()
+                    sim = clip_util.cos_sim(embeddings[i], embeddings[j]).item()
                     if sim > threshold:
                         is_duplicate = True
                         break
