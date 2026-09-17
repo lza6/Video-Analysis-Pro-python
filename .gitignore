@@ -102,7 +102,7 @@ out/
 # v10.3 构建产物/测试临时
 desktop/dist/
 desktop/*.zip
-desktop/test-*.js
+desktop/test-log-store.js
 webapp/test-results/
 .agent-scratch/
 voiceover_placeholder.wav

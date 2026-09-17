@@ -50,6 +50,9 @@ let currentPort = null;
 /** @type {boolean} */
 let isQuitting = false;
 
+// v10.4.0 (P0-4)：CUA 服务卸载函数（VAP_CUA_ENABLED=1 时由 registerIpc 赋值）
+let unmountCua = null;
+
 // ---------- autoUpdater(electron-updater) ----------
 // 仅生产 && feed 配置存在才启用;否则只打日志(安全降级,不做真实更新)。
 function setupAutoUpdater() {
@@ -239,6 +242,25 @@ function registerIpc() {
     logStore.on("append", listener);
     return { ok: true };
   });
+
+  // CUA 服务（v10.4.0 / P0-4）：此前 desktop/cua-service.js 真实存在（3.7KB）
+  // 但 main.js 零引用 —— 死文件被打进安装包，且 VAP_CUA_ENABLED 无消费方。
+  // 现按开关挂载：默认关（不注册任何 handler，零回归）。
+  // 红线：screenshot 走真实 capturePage；click/type/getForeground 恒为 mock
+  // 且带 mock:true 标注，绝不伪造真实桌面操作。
+  if (process.env.VAP_CUA_ENABLED === "1") {
+    try {
+      const { mountCuaService } = require("./cua-service");
+      unmountCua = mountCuaService(ipcMain, () =>
+        mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null
+      );
+      logStore.append("main", "info", "CUA 服务已挂载（VAP_CUA_ENABLED=1）");
+    } catch (e) {
+      logStore.append("main", "error", `CUA 服务挂载失败: ${e.message}`);
+    }
+  } else {
+    logStore.append("main", "info", "CUA 服务未启用（VAP_CUA_ENABLED != 1）");
+  }
 }
 
 async function boot() {
@@ -501,6 +523,15 @@ function cleanupAndQuit() {
   if (runtime) {
     runtime.stop();
     runtime = null;
+  }
+  // v10.4.0 (P0-4)：卸载 CUA IPC handler，防退出后残留
+  if (typeof unmountCua === "function") {
+    try {
+      unmountCua();
+    } catch (e) {
+      mlog("unmount CUA failed: " + e.message);
+    }
+    unmountCua = null;
   }
 }
 
