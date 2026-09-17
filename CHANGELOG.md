@@ -1,5 +1,205 @@
 # Changelog — TingFeng Hermes
 
+## [10.4.0] — 2026-09-15 · 交付闭环收尾 + 启动性能急救（P0 批次）
+
+### P0-6 启动性能急救（本次最大收益：**29.18s → 1.42s，20.6×**）
+
+实测（干净解释器 + `time.time()`，Windows 本机）归因发现的**根因**：
+`src/core/logic.py` 在**模块顶层**为了算出能力标志而真实 import 了重依赖。
+
+| 目标 | v10.3.1 | v10.4.0 | 说明 |
+|------|---------|---------|------|
+| `import src.web.app` | **29.18s** | **1.42s** | 后端冷启动（用户感受到的白屏时长） |
+| `import src.core.logic` | 19.64s | 0.66s | 核心流水线模块 |
+| `import sentence_transformers` | 19.00s | 不再触发 | 仅在首次真实使用语义检索时加载 |
+| `import torch` | 4.15s | 不再触发 | 惰性代理，首次使用才加载 |
+| `import seaborn`（连带 scipy.stats + pandas） | 0.87s | 不再触发 | 改为 find_spec 探测 |
+
+- `logic.py:32` 的 `from sentence_transformers import util` 改为 `_probe("sentence_transformers")`
+  （与同文件 `SCENEDETECT_AVAILABLE`/`DECORD_AVAILABLE` 完全一致的「只探测不绑定」写法）。
+  **顺带修正该处注释与实现自相矛盾的坑**（注释第 21-23 行写着「只探测不绑定」，第 32 行却真实绑定）。
+- 模块级 `import torch` 改为 `_LazyModule("torch")` 惰性代理：`torch.cuda.is_available()` 等
+  **调用写法完全不变**，只是把真实 import 推迟到首次属性访问（`logic.torch.cuda` 这类既有
+  monkeypatch 测试写法继续可用）。
+- `_detect_advanced_features()` 从「真实 import moviepy/matplotlib.pyplot/seaborn」
+  改为 `find_spec` 探测：仍是**真实探测**（不是硬编码 `True`，守住 CLAUDE.md §三.8），
+  但不再把 ~1.6s 的导入代价加在每次进程启动上。
+- 新增 `scripts/measure_startup.py`（可复跑基准，带 v10.3.1 基线对照）
+  与 `tests/test_startup_perf.py`（22 用例：契约 + 计时预算 + 防回退）。
+
+### P0-5 eli5 工具面全覆盖（修正 4 个「从未命中」的模板名）
+
+发现 eli5 的模板匹配了**注册表里不存在的工具名**，导致 4 条模板从未生效：
+
+| 模板里写的（错误） | 注册表里的真实名字 |
+|--------------------|--------------------|
+| `create_highlights` | `highlight_cut` |
+| `run_ocr` | `ocr_frame` |
+| `point_and_jump` | `point_at_object` |
+| `delete_this_history` | `delete_history` |
+
+- 32 个工具（legacy 16 + media_gen 4 + web_auto 7 + cdp 5）**全部补齐**人话模板
+  （此前只有 9 条，且其中 4 条永不命中）。
+- `ocr_frame` 模板此前误用 `args["path"]`，真实入参是 `seconds`，一并修正。
+- 兜底文案从「调用了 X，返回了 N 字符的结果」（假装正常）改为
+  「⚠️ 尚未收录「X」的人话说明（原始结果见日志页）」——**明确告知缺口**。
+- 风险前缀由 `_with_risk()` 统一按 `scope_guard` 分类添加：
+  危险写 → 「⚠️ 危险操作（需你确认）」；一般写 → 「需要你确认后才会执行」。
+- 新增 `tests/test_eli5_coverage.py`：从工具注册表**动态枚举**做契约守护
+  （新增工具却忘补模板 → 立刻变红），并断言 eli5 的风险分级与 `scope_guard` 完全一致。
+
+### P0-1 skill 准入闸门：`validator.py` 首次进入生产路径
+
+`src/skills/validator.py` 的三重验证（跨领域/预测力/排他性）自 v10.1 定义以来
+**零生产调用方**（只有单测），蒸馏出的草稿绕过一切质量闸门。
+
+- `DraftPipeline.distill` 产出最佳草稿后调用 `validate_skill`，结果挂到
+  `ExperienceDraft.admitted` / `validation_report`（**不静默丢弃**，用户能看见被拒原因）。
+- 关键正确性修复：新增 `_AdmissionCandidate` 适配器，让「预测力」用**原始 tool_chain**
+  比较复现率。若直接把 `SkillDraft` 交给 validator，它拿到的是中文步骤描述
+  （如「抽帧采样」），与历史里的原始工具名（如 `extract_frames`）不同域，
+  复现率恒为 0 → 会把**每一条**草稿都误杀。
+- fail-open：validator 自身抛异常时放行并留痕（准入闸门坏了不应阻断主流程）。
+- `/api/skills/distill` 现在把**已加载 skills** 作为 `existing` 传入（此前该参数从未被使用，
+  导致跨领域/排他性两项恒为通过），并在响应里返回 `admitted` + `validation`。
+- 开关沿用既有 `VAP_SKILLS_AUTODISTILL`（设 0 完全跳过，零回归）。
+- 新增 `tests/test_skills_admission.py`（14 用例）。
+
+### P0-2 `SkillAdvisor` 首次进入生产路径
+
+- 新增 `GET /api/skills/suggestions`：列出所有「同类 intent ≥3 次 + tool_chain 稳定」
+  的经验建议，带 `recommended_tool_chain` / `sample_count` / `draft_skill_md`。
+  为下一步的「经验→建议→采纳→回滚」闭环（P1-4）提供数据源。
+- 候选 intent 复用 `distiller.load_grouped_experiences`，保证两个端点口径一致。
+- 开关 `VAP_SKILLS_ADVISOR`（默认 1）；设 0 → 空列表 + `disabled: true`（零回归）。
+- 新增 `tests/test_skills_suggestions.py`（9 用例）。
+
+### P0-3 插件框架真相化（文档描述的能力现在真的能用）
+
+`CLAUDE.md` 与 `docs/guide/plugin-development.md` 一直描述着
+`plugins/<name>/plugin.yaml` + `main.py` 的布局，结果核查发现：`plugins/` 目录、
+`config/plugins.yml`、`VAP_PLUGIN_DIR` **三者都不存在**，`PluginLoader` 也只在测试里被实例化过；
+而且 loader 只会 `importlib.import_module(spec.module)`，**只能加载已安装可 import 的模块**。
+
+- `PluginLoader` 新增 `load_from_dir()`：按**文件路径**加载 `plugins/<name>/main.py`
+  （支持 `register(ctx, config)` 与 `PLUGIN_CLASS` 两种写法；`plugin.yaml` 可选，
+  支持 `id`/`name`/`enabled`/`config`）。单个插件损坏不影响其他插件，也不阻断启动。
+- 新增真实目录与示例：`plugins/README.md`、`plugins/example-hello/{plugin.yaml,main.py}`
+  （示例默认 `enabled: false`，不改变任何现有行为）、`config/plugins.yml`。
+- 生产接线：`_build_react_agent` 加载插件到**同一个** `ToolRegistry`，
+  因此插件工具与内置工具共享同一套 `scope_guard` 审批/sandbox 治理。
+- **接线后二次审查又抓出两个「假实现」**（都是「文档承诺了、代码没做」）：
+  1. `ctx.append_system_prompt()` **没有任何消费者**：`PluginContext` 在 `_build_react_agent`
+     里就地构造、随函数返回被丢弃，system prompt 只由 `build_agent_system_prompt` 产出。
+     插件声明的提示词是静默 no-op——用户开了插件也看不到任何效果。现真实拼接进模型上下文。
+  2. `dispose_all()` **不卸载插件注册的工具**：`ctx.register_tool()` 返回的 disposer
+     被存进 `PluginState.disposers` 但**无人调用**，`dispose_all()` 只跑插件 `register()`
+     自己 return 的闭包（返回 None 是常态）。现由 loader 组合成 LIFO 卸载器
+     （插件自带 disposer → 逆序 ctx 副作用 disposer），「卸载」不再是说法。
+- **可观测化**：新增 `GET /api/plugins`（`src/web/routers/plugins.py`）返回
+  `discovered`（只读扫描，**不执行插件代码**）/ `loaded` / `loaded_effects`（副作用审计）
+  / `loaded_at_least_once`。用户此前只能翻日志才知道插件有没有被认到。
+- `config/plugins.yml` + `plugins/example-hello/main.py` 补充**只读工具**
+  （`example_hello`）演示工具面，使「插件工具走同一套审批治理」可被真实断言。
+- **修正文档幻觉**：`docs/guide/plugin-development.md` 重写——旧版描述的
+  `permissions` / `mounts` / `depends_on` / entry_points / `ctx.tools.register` /
+  `ctx.on_dispose` **代码里全都不存在**；现文档逐项对应真实代码，并写明
+  「插件只在 react 后端加载」的边界与原因。
+- 新增 `tests/test_plugin_wiring.py`（31 用例，含工具**真实 execute** 断言、
+  卸载后工具从 registry 消失断言、`/api/plugins` 端到端断言、legacy 路径不得注入插件的反向断言）。
+
+### P0-4 `cua-service.js` 二选一了断（选择了接线）
+
+`desktop/cua-service.js`（3774 字节）此前被打进安装包但 `main.js` **零引用**，
+`VAP_CUA_ENABLED` 也没有任何消费方。
+
+- 现按开关挂载：`VAP_CUA_ENABLED=1` 时 `registerIpc()` 调用 `mountCuaService()`，
+  退出时 `cleanupAndQuit()` 调 `unmountCua()` 卸载 handler（**默认关，零回归**）。
+- 守住红线：`screenshot` 走真实 `webContents.capturePage`；`click`/`type`/`getForeground`
+  恒为 mock 且带 `mock: true` 标注，**绝不伪造真实桌面操作**。
+- 新增 `desktop/test-cua-service.js`（13 项 node 断言）与 `tests/test_desktop_wiring.py`（10 用例）。
+
+### P0-7 CI 三道门（把上面的成果锁住，防回退）
+
+新增 `scripts/check_wiring.py`：
+
+1. **wiring（棘轮式）**：模块级公开符号在非测试代码里零引用且无 `# not-wired: 原因`
+   标注即视为未接线。用 `scripts/wiring_baseline.txt` 冻结**存量 76 个**（棘轮），
+   只阻止**新增**（当前 0 新增）。清除死代码后重新生成基线即可收紧。
+2. **version**：5 处版本号一致性（`constants.py` / `src/web/app.py` /
+   `desktop/package.json` / `webapp/package.json` / `CHANGELOG` 顶部）。
+3. **docs**：文档提到的关键路径必须真实存在，且 `docs/guide/` 下不得有 `TODO:` 残留
+   （顺手修掉了 `getting-started.md` 里指向其实已存在的 `dev-setup.ps1` 的过期 TODO）。
+
+### P0-8 覆盖率基线（HEAD 重跑并留档）
+
+旧结论「覆盖率 80.25%」对应的 `.coverage` 文件 mtime（08:54）**早于** HEAD 提交时间（13:23），
+即该数字并非 HEAD 的实测值 —— **UNVERIFIED**。本批次在 HEAD+改动上真跑全量两段式覆盖率，
+得到可复现基线：**TOTAL 14788 语句 / 3412 缺失 / 77%**（`--skip-empty`）。
+后续提升目标按此基线设定，不再引用来源不明的旧数字。
+
+### P0-9 未完成（有意延迟，非静默跳过）
+
+审批总线多窗口隔离：`src/web/deps.py` 的 `ApprovalBus` 是**进程级单例**，
+多窗口场景下 A 窗口点「允许」批准的可能是 B 窗口的操作。正确修复需要把 session/窗口上下文
+贯穿整条审批链路（`_make_sse_emitting_approval_fn` → `ApprovalBus` → SSE 分发），
+属于跨模块契约变更，在发布前强行落地风险高于收益。**本版不假装已修**，
+留作 v10.5.0 首项（已写入 `计划书/下一步改进指南.md`）。
+
+### P0-10 脏产物清理（工具化 + 安全默认）
+
+新增 `scripts/clean_artifacts.py`（默认 dry-run，`--apply` 才删；只删**已被 .gitignore 覆盖**的目录，
+且保留 `desktop/dist` 里最新安装包）。实测释放 **3.4 GB**：`desktop/dist` 4.1GB→保留最新产物、
+`webapp/.next` 91MB、`cache` 27MB、`graft` 16MB 等。
+
+### 测试隔离缺陷修复（全量跑时暴露的真问题）
+
+- `src/web/security.py` 的限流计数是**进程级全局**且不随测试结束重置 → `tests/conftest.py`
+  新增自动重置夹具。修复前表现为「单跑绿、全量跑 429」，是**测试隔离缺陷**而非业务偶发。
+- `tests/test_batch_runner_e2e.py` 的批量 E2E 需要真实 NVIDIA key + 监视目录，
+  此前在无凭据环境直接失败 → 改为按前置条件 **skip**（诚实跳过，不是假装通过）。
+
+### 验证（真实运行）
+
+- 新增用例：`test_startup_perf.py` 22 · `test_eli5_coverage.py` 26 · `test_skills_admission.py` 14
+  · `test_skills_suggestions.py` 9 · `test_plugin_wiring.py` 31 · `test_desktop_wiring.py` 10
+  · `test_check_wiring.py` · `desktop/test-cua-service.js` 13 项 node 断言
+- 全量测试（两段式实跑）：**748 passed + 474 passed + 3 skipped**（共 ~1222 passed，缺 0 失败）
+- 覆盖率：**77%**（14788 statements，实测 .coverage 与 HEAD 同步）
+- `pyflakes src/ launcher.py scripts/`、`pyflakes tests/`（改动文件）：零告警；
+  webapp `tsc --noEmit` 0 错误
+- `mypy`：改动**未引入新告警**（存量 17 条均位于 v10.4.0 之前的代码：
+  `distiller.py:239-256/350-399` 的 `object` 泛型 + `agent.py:1159` 的 `frames` 注解；
+  mypy 当前**不在 CI 门内**，属技术债而非本版回归）
+- `scripts/check_wiring.py --check wiring,version,docs` → **通过**
+- `scripts/measure_startup.py` → `src.web.app 1.31s`（目标 ≤3.0s）→ **PASS**
+
+### E2E 验收（真实进程 + 真实 HTTP，非 TestClient）
+
+用 `python -m src.web.serve --port 8123` 起真后端，走真 urllib 请求：
+
+| 链路 | 结果 |
+| --- | --- |
+| `GET /api/health` | 200，capabilities/disk_free_gb 正常 |
+| `GET /api/skills` | 200，返回 12 个已入库 skill |
+| `GET /api/skills/suggestions` | 200，真实经验库产出 1 条建议（`生成字幕` → `make_subtitle`，样本 7）——P0-2 接线生效 |
+| `POST /api/agent/chat` → `GET /api/agent/run_stream` | 200 + SSE 流正常结束（react 路径） |
+| `GET /api/plugins`（`VAP_PLUGIN_DIR` 指向启用副本） | 运行后 `loaded: ["video_analysis", "example-hello"]`，`loaded_effects` 三条（tool/system_prompt/setting），日志 `已加载目录型插件: example-hello` |
+| 后端冷启动（进程 → `Application startup complete`） | ~0.5s |
+
+E2E 里**新发现并当场修正**的问题：`/api/agent/run`（legacy 端点）走 `_build_orchestrator`，
+该路径**没有**插件加载 —— 初版接线只覆盖 react。经审查确认这**不应**补齐：
+legacy registry（`src/core/agent_tools.ToolRegistry`）没有 scope_guard，
+注入插件工具等于让插件绕过审批。现为「有意不接」并加反向测试守住，文档写明边界。
+
+### 诚实性说明
+
+- `.env.example` 未能通过编辑器与脚本工具写入（该文件被工具链按 dotfile 跳过），
+  `VAP_PLUGIN_DIR` / `VAP_PLUGIN_CONFIG` / `VAP_SKILLS_ADVISOR` 三个新变量已写入
+  `CLAUDE.md` §四 的环境变量表。
+- `import torch` 在 `logic.py` 改为惰性代理后，若调用方依赖 `isinstance(logic.torch, ModuleType)`
+  会不成立；全仓已确认无此写法（既有测试都是属性访问或 `sys.modules` 断言）。
+
 ## [10.3.1] — 2026-09-11 · 交付闭环（P0"Deliver, not Build"）: 默认路径接通 + 审批/SSE 契约修复 + 工具面统一 + skills 正文注入 + 发布修正
 
 ### P0-1 默认路径接通

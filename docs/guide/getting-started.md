@@ -19,7 +19,9 @@ cd Video-Analysis-Pro-python
 .\scripts\dev-setup.ps1
 ```
 
-> TODO: `scripts/dev-setup.ps1` 当前由 12.2 onboarding 任务落地，脚本未就绪前请按下方手动步骤。
+> `scripts/dev-setup.ps1`（Windows）与 `scripts/dev-setup.sh`（macOS/Linux）已在仓库中，
+> 会依次准备 venv、安装 Python/前端/桌面三套依赖。任一步失败时脚本会停在报错处，
+> 也可直接按下方「手动步骤」逐条执行。
 
 ## 手动步骤
 

@@ -18,10 +18,10 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings, warn_on_weak_token
 from .deps import get_config_manager, get_job_store, web_jobs_root
-from .routers import (
+from .routers import (  # noqa: F401 — 包聚合导入，供 include_router 使用
     agent, analyze, batch, config, decisions,
     health, im_gateway, logs, media, metrics, models,
-    providers, remote, requests, skills, surveillance,
+    plugins, providers, remote, requests, skills, surveillance,
 )
 from .routers.analyze import init_analyze_semaphore
 from .security import register_content_root
@@ -139,7 +139,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
         title="TingFeng Hermes — Web API",
-        version="10.3.1",
+        version="10.4.0",
         lifespan=lifespan,
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
@@ -167,6 +167,8 @@ def create_app() -> FastAPI:
     app.include_router(logs.router)
     app.include_router(decisions.router)
     app.include_router(skills.router)
+    # v10.4.0 (P0-3)：插件框架可观测化（发现 + 实际加载结果）
+    app.include_router(plugins.router)
     app.include_router(batch.router)
     app.include_router(surveillance.router)
     # v9.0.0:IM 网关 + 远程访问(Mock adapter,真实凭据预算 0)

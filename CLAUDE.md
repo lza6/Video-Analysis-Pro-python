@@ -159,6 +159,8 @@ CI 在打 `v*` tag 时触发 `build-windows` job 跑全量测试 + electron-buil
 - `PluginContext` 是 contextvars.ContextVar，**不要**引入 Cordis 重依赖
 - 插件 patch 是声明式 YAML（`plugin.yaml`），**不要**让插件直接写 Python 代码 hot-patch
 - 插件挂载/卸载通过 `loader.py` + `patch.py`，运行时可热插拔
+- `plugin.yaml` 只有 4 个字段：`id` / `name` / `enabled` / `config`。**不要**在文档或代码里引入
+  `permissions` / `mounts` / `depends_on` / entry_points —— 它们不存在（v10.4.0 已把这段文档幻觉清除）
 
 ### 5. 模型下载需 SHA256 校验
 
@@ -211,7 +213,9 @@ CI 在打 `v*` tag 时触发 `build-windows` job 跑全量测试 + electron-buil
 | `VAP_IM_ADAPTERS` | 启用的 IM adapter 列表（`mock` / `wechat` / `telegram` / `discord`） |
 | `VAP_TUNNEL_PROVIDER` | 远程访问方案（`mock` / `tailscale` / `direct` / `cloudflare`） |
 | `VAP_TUNNEL_TOKEN` | Tailscale / Cloudflare Access 凭据 |
-| `VAP_PLUGIN_DIR` | 插件加载目录（默认 `plugins/`） |
+| `VAP_PLUGIN_DIR` | 目录型插件扫描根目录（默认 `plugins`）；v10.4.0 起真实生效，目录不存在则跳过不阻断 |
+| `VAP_PLUGIN_CONFIG` | 声明式插件清单路径（默认 `config/plugins.yml`，YAML 列表） |
+| `VAP_SKILLS_ADVISOR` | 「经验→建议」端点开关（默认 1=开；0=空列表+disabled，零回归） |
 | `VAP_IP_RATE_LIMIT_PER_MIN` | headless IP 限流（默认 10，0=禁用） |
 | `VAP_HEADLESS_TOKEN` | headless Bearer Token 鉴权（空=禁用） |
 
@@ -223,9 +227,20 @@ CI 在打 `v*` tag 时触发 `build-windows` job 跑全量测试 + electron-buil
 
 `config/prompts/frame_analysis/` 下三个 `.txt`：`describe.txt` / `frame_analysis.txt` / `video_summary.txt`。`PromptLoader` 默认指向此目录。新增模板放此处。
 
-### 插件声明（入库）
+### 插件（入库）
 
-`plugins/<plugin-name>/plugin.yaml`：声明式 patch，描述挂载点 / 依赖 / 版本。`loader.py` 扫此目录加载。
+`plugins/<plugin-name>/`：目录型插件。`main.py` 必须导出 `register(ctx, config)` 或 `PLUGIN_CLASS`；
+`plugin.yaml` 可选（声明 `id` / `name` / `enabled` / `config`）。
+
+`PluginLoader` 三条加载路径：① `config/plugins.yml` 声明的模块（按顺序）② `src/core/plugins/builtin/` 内置模块 ③ `plugins/` 目录扫描。
+生产装配点在 `src/web/routers/agent.py` 的 `_build_react_agent`（插件工具与内置工具共用同一个 `registry`，因此走同一套 `scope_guard` 审批）。
+插件追加的 system prompt 片段也在同一处拼进模型上下文（`plugin_ctx.system_prompt`）；此前该字段没有消费者，插件提示是静默 no-op。
+
+自查接口：`GET /api/plugins` → `discovered`（只读扫描，不执行插件代码）/ `loaded` / `loaded_effects`（副作用审计）。
+
+已知边界：插件**只在 react 后端**加载（默认）。legacy 后端用 `src/core/agent_tools.ToolRegistry`，**没有** scope_guard，
+接入插件会让插件工具绕过审批，因此有意不接 —— 有反向测试（`tests/test_plugin_wiring.py`）锁住这条决策。
+卸载语义：`dispose_all()` = 插件自带 disposer + `ctx` 记录的副作用 disposer（逆序），插件作者不必手写注销工具。
 
 ---
 
@@ -279,7 +294,7 @@ CI 在打 `v*` tag 时触发 `build-windows` job 跑全量测试 + electron-buil
 | 加一个前端页面 | `webapp/app/<route>/page.tsx` 新建，Next 16 App Router；遵守 Tailwind v4 + 玻璃拟态设计系统 |
 | 加一个 IM adapter | `src/core/im_gateway/adapters/` 新建，实现 `IMAdapter` 协议（send/receive），注册到 `gateway.py`；在 `tests/test_im_gateway.py` 补测试 |
 | 加一个远程 tunnel 方案 | `src/remote/tunnels/` 新建，实现 `Tunnel` 抽象（connect/health/close），注册到 `manager.py`；在 `tests/test_remote_tunnel.py` 补测试 |
-| 加一个插件 | `plugins/<name>/plugin.yaml` 声明式 patch + `main.py` 入口，`loader.py` 扫描自动加载 |
+| 加一个插件 | `plugins/<name>/main.py` 导出 `register(ctx, config)` 或 `PLUGIN_CLASS`（可选 `plugin.yaml` 声明 id/enabled/config），`PluginLoader.load_from_dir` 扫 `VAP_PLUGIN_DIR` 自动加载；见 `plugins/README.md` 与 `plugins/example-hello/` |
 | 加一个 subagent 角色 | `src/core/subagent/role_template.py` 加 RoleTemplate，`director.py` 路由表加 entry |
 | 改 LLM 接入 | `src/core/logic.py` 的 `VideoAnalyzer` / `OllamaClient`；API 客户端测试在 `tests/test_api_clients.py` |
 | 改版本号 | `src/utils/constants.py:APP_VERSION` + `CHANGELOG.md` 顶部加条目 + `desktop/package.json` version + `webapp/package.json` version + `config/app_config.ini` 的 `version`（运行时文件，勿入库） |
