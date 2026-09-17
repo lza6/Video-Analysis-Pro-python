@@ -1,13 +1,17 @@
 "use client";
 
-import { useState } from "react";
-import { apiPostJson, apiUrl, ApiError } from "@/lib/api";
+import { useEffect, useRef, useState } from "react";
+import { apiDelete, apiGet, apiPostJson, apiUrl, ApiError } from "@/lib/api";
 import type {
   AgentApprovalRequest,
   AgentChatResponse,
   AgentRunStreamStepEvent,
   AgentRunStreamDoneEvent,
 } from "@/lib/types";
+import {
+  APPROVAL_TOOL_CN,
+  APPROVAL_CONSEQUENCE,
+} from "@/lib/approvalMaps";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 
@@ -31,42 +35,16 @@ interface PendingApproval {
   timeout: number;
 }
 
-/** 工具中文名映射(P0-3 小白友好:弹窗不再裸显工具名)。 */
-const APPROVAL_TOOL_CN: Record<string, string> = {
-  delete_history: "删除历史记录",
-  delete_video: "删除视频",
-  highlight_cut: "剪辑落盘(高光片段导出)",
-  trigger_batch: "启动批量任务",
-  start_rtsp_monitor: "启动监控流",
-  generate_skill: "生成技能",
-  make_subtitle: "生成字幕文件",
-  make_short_video: "生成竖屏短视频",
-  make_voiceover: "生成配音",
-  create_cut_clip: "剪辑视频片段",
-  web_browser_trigger: "浏览器点击",
-  web_browser_update: "浏览器填写表单",
-  cdp_evaluate: "在页面执行脚本(任意 JS)",
-  cdp_eval_write: "在页面执行写脚本",
-  send_message: "发送消息",
-};
+interface SessionItem {
+  session_id: string;
+  updated_at?: string;
+  size?: number;
+}
 
-/** 工具后果一句话说明(P0-3:让用户知道"允许"意味着什么)。 */
-const APPROVAL_CONSEQUENCE: Record<string, string> = {
-  delete_history: "将删除该条分析历史记录,删除后不可恢复。",
-  delete_video: "将删除视频文件,删除后不可恢复。",
-  highlight_cut: "将把选中的片段剪辑并写入磁盘。",
-  trigger_batch: "将启动批量处理任务,占用 CPU/GPU 资源。",
-  start_rtsp_monitor: "将连接监控摄像头并开始持续分析。",
-  make_subtitle: "将在磁盘上写入一个字幕文件(SRT/VTT)。",
-  make_short_video: "将在磁盘上写入一个 9:16 短视频文件。",
-  make_voiceover: "将在磁盘上写入一个配音音频文件。",
-  create_cut_clip: "将在磁盘上写入剪辑后的视频片段。",
-  web_browser_trigger: "将在网页上执行一次点击操作。",
-  web_browser_update: "将在网页表单中填写内容。",
-  cdp_evaluate: "将在网页里执行任意 JS 脚本 —— 请确认你信任该操作。",
-  cdp_eval_write: "将在网页里执行写操作脚本。",
-  send_message: "将通过消息渠道向外发送内容。",
-};
+interface SessionEventDto {
+  type: string;
+  payload: Record<string, unknown>;
+}
 
 /** 流式读取 SSE,逐个解析 event。 */
 async function* readSSE(
@@ -96,6 +74,9 @@ async function* readSSE(
   }
 }
 
+/** 工具中文名(缺失时退回裸名——approvalMaps 守护测试会拦住新增遗漏)。 */
+const toolCn = (tool: string) => APPROVAL_TOOL_CN[tool] || tool;
+
 export default function AgentPage() {
   const [input, setInput] = useState("");
   const [msgs, setMsgs] = useState<Msg[]>([]);
@@ -103,9 +84,92 @@ export default function AgentPage() {
   const [jobId, setJobId] = useState("");
   const [approval, setApproval] = useState<PendingApproval | null>(null);
   const [approvalBusy, setApprovalBusy] = useState(false);
+  // v10.5.0 (P1-8): 审批剩余秒数(实时倒计时,归零自动关闭)
+  const [remaining, setRemaining] = useState<number>(0);
+  // v10.5.0 (P1-9): 会话管理
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState("");
+
+  // v10.5.0 (P1-7): 流式打字机——当前正在追加的 agent 消息下标
+  const streamRef = useRef<number | null>(null);
+  // 已由 tool_done 实时渲染的工具调用 id(去重 tool_result 兼容补发)
+  const toolDoneIds = useRef<Set<string>>(new Set());
 
   const appendAgent = (text: string) =>
     setMsgs((m) => [...m, { role: "agent", text }]);
+
+  /** 把增量文本追加到当前流式消息(打字机)。 */
+  const appendStream = (delta: string) => {
+    setMsgs((prev) => {
+      if (streamRef.current != null && streamRef.current < prev.length) {
+        const next = [...prev];
+        next[streamRef.current] = {
+          role: "agent",
+          text: next[streamRef.current].text + delta,
+        };
+        return next;
+      }
+      const idx = prev.length;
+      streamRef.current = idx;
+      return [...prev, { role: "agent", text: delta }];
+    });
+  };
+
+  const finalizeStream = () => {
+    streamRef.current = null;
+  };
+
+  /** 会话列表刷新。 */
+  const loadSessions = async () => {
+    try {
+      const r = await apiGet<{ sessions: SessionItem[] }>("/api/agent/sessions");
+      setSessions(r.sessions || []);
+    } catch {
+      /* 后端不可用/未就绪,静默 */
+    }
+  };
+
+  useEffect(() => {
+    void loadSessions();
+  }, []);
+
+  const startNewSession = () => {
+    setActiveSessionId("");
+    setMsgs([]);
+    setJobId("");
+    finalizeStream();
+  };
+
+  const openSession = async (sid: string) => {
+    try {
+      const r = await apiGet<{ events: SessionEventDto[] }>(
+        `/api/agent/sessions/${sid}`,
+      );
+      const rebuilt: Msg[] = [];
+      for (const e of r.events) {
+        if (e.type === "user") {
+          rebuilt.push({ role: "user", text: String(e.payload.content ?? "") });
+        } else if (e.type === "assistant" && !e.payload.tool_calls) {
+          rebuilt.push({ role: "agent", text: String(e.payload.content ?? "") });
+        }
+      }
+      setMsgs(rebuilt);
+      setActiveSessionId(sid);
+    } catch (e) {
+      appendAgent(`加载会话失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const deleteSession = async (sid: string) => {
+    if (!window.confirm(`删除会话 ${sid.slice(0, 8)}…?此操作不可恢复。`)) return;
+    try {
+      await apiDelete<unknown>(`/api/agent/sessions/${sid}`);
+      if (activeSessionId === sid) startNewSession();
+      await loadSessions();
+    } catch (e) {
+      appendAgent(`删除会话失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
 
   /** 处理 run_stream 收到的 approval-request 事件:弹审批 UI。 */
   const handleApproval = (data: string) => {
@@ -139,7 +203,7 @@ export default function AgentPage() {
         { allow },
       );
       appendAgent(
-        `${allow ? "✅" : "⛔"} 审批[${r.decided ? "已生效" : "未生效(重复/已超时)"}] 工具=${approval.tool}`,
+        `${allow ? "✅" : "⛔"} 审批[${r.decided ? "已生效" : "未生效(重复/已超时)"}] 工具=${toolCn(approval.tool)}`,
       );
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : String(e);
@@ -150,14 +214,46 @@ export default function AgentPage() {
     }
   };
 
-  /** chat 后自动循环执行 plan(SSE 流式),每步实时投到对话流。
-   *
-   * v10.3.1 (P0-2):react 引擎契约 —— /chat 返回 auto_run=true +
-   * session_id(plan_steps 为空数组),前端凭 session_id 续接
-   * /run_stream?session_id=…。审批事件(approval-request)由此 SSE
-   * 通道投递;此前 react 返回 auto_run=false 导致审批无消费方,
-   * 写工具静默挂 60s 后 deny。
-   */
+  // v10.5.0 (P1-8): 审批实时倒计时
+  useEffect(() => {
+    if (!approval) return;
+    const total = approval.timeout > 0 ? approval.timeout : 60;
+    const startedAt = Date.now();
+    setRemaining(total);
+    const timer = setInterval(() => {
+      const left = total - (Date.now() - startedAt) / 1000;
+      if (left <= 0) {
+        clearInterval(timer);
+        setRemaining(0);
+        setApproval(null);
+        appendAgent(`⏰ 审批超时(${total}s),已自动拒绝`);
+      } else {
+        setRemaining(left);
+      }
+    }, 250);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approval?.pin]);
+
+  // v10.5.0 (P1-8): 键盘快捷键——Enter=允许 / Esc=拒绝(排除中文输入法组字)
+  useEffect(() => {
+    if (!approval) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing) return;
+      if (e.key === "Enter") {
+        e.preventDefault();
+        void decideApproval(true);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        void decideApproval(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approval, approvalBusy]);
+
+  /** chat 后自动循环执行 plan(SSE 流式),每步实时投到对话流。 */
   const autoRunPlan = async (
     jobIdParam: string,
     sessionIdParam?: string,
@@ -166,8 +262,6 @@ export default function AgentPage() {
     const params = new URLSearchParams();
     if (jobIdParam) params.set("job_id", jobIdParam);
     if (sessionIdParam) params.set("session_id", sessionIdParam);
-    // v10.3.1 (Critic B-1 修复):react 执行在 /run_stream,text 必须重放,
-    // 否则 run_turn 收到空输入,模型不知道用户说了什么。
     if (textParam) params.set("text", textParam);
     const qs = params.toString();
     const url = apiUrl(`/api/agent/run_stream${qs ? `?${qs}` : ""}`);
@@ -179,6 +273,63 @@ export default function AgentPage() {
     }
     try {
       for await (const { event, data } of readSSE(res)) {
+        // v10.5.0 (P1-7): 实时打字机
+        if (event === "assistant_delta") {
+          let p: { delta?: string } | null = null;
+          try {
+            p = data ? (JSON.parse(data) as { delta?: string }) : null;
+          } catch {
+            p = null;
+          }
+          if (p?.delta) appendStream(p.delta);
+          continue;
+        }
+        // v10.5.0 (P1-7): 工具实时状态
+        if (event === "tool_start") {
+          finalizeStream();
+          let p: { tool?: string } | null = null;
+          try {
+            p = data ? (JSON.parse(data) as { tool?: string }) : null;
+          } catch {
+            p = null;
+          }
+          appendAgent(`⚙️ 执行 ${toolCn(p?.tool ?? "(未知工具)")}…`);
+          continue;
+        }
+        if (event === "tool_done") {
+          finalizeStream();
+          let p: {
+            tool?: string;
+            tool_call_id?: string;
+            ok?: boolean;
+            error?: string | null;
+            human?: string;
+          } | null = null;
+          try {
+            p = data ? JSON.parse(data) : null;
+          } catch {
+            p = null;
+          }
+          if (p?.tool_call_id) toolDoneIds.current.add(p.tool_call_id);
+          const name = toolCn(p?.tool ?? "(未知工具)");
+          if (p?.ok) {
+            appendAgent(`✅ ${p.human || `${name} 完成`}`);
+          } else {
+            appendAgent(`⚠️ ${name} 失败: ${p?.error ?? "未知错误"}`);
+          }
+          continue;
+        }
+        if (event === "supervise") {
+          finalizeStream();
+          let p: { describe?: string } | null = null;
+          try {
+            p = data ? (JSON.parse(data) as { describe?: string }) : null;
+          } catch {
+            p = null;
+          }
+          if (p?.describe) appendAgent(`🧠 监督: ${p.describe}`);
+          continue;
+        }
         if (event === "approval-request") {
           handleApproval(data);
           continue;
@@ -204,10 +355,9 @@ export default function AgentPage() {
                 : p.status === "skipped"
                   ? "⏭️"
                   : "⏳";
-          // v10.3.1 (P1-1):react 的 tool_result 事件带 human 字段
-          // (eli5 大白话),有则优先展示人话,原始结果折叠进次行。
-          const human =
-            (payload as Record<string, unknown>)?.human as string | undefined;
+          const human = (payload as Record<string, unknown>)?.human as
+            | string
+            | undefined;
           appendAgent(
             human
               ? `${statusIcon} ${human}`
@@ -216,22 +366,31 @@ export default function AgentPage() {
                   `结果: ${p.result ?? "(空)"}`,
           );
         } else if (event === "tool_result") {
-          // v10.3.1 (P1-1):react 工具结果人话摘要行。
+          // 兼容补发:实时 tool_done 已渲染过的工具跳过(去重)
           try {
-            const p = JSON.parse(data) as { human?: string };
+            const p = JSON.parse(data) as {
+              human?: string;
+              tool_call_id?: string;
+            };
+            if (p?.tool_call_id && toolDoneIds.current.has(p.tool_call_id)) {
+              continue;
+            }
             if (p?.human) appendAgent(`🔧 ${p.human}`);
           } catch {
             /* 忽略解析失败 */
           }
           continue;
         } else if (event === "done") {
+          finalizeStream();
           const p = payload as AgentRunStreamDoneEvent | null;
           const reason = p?.reason ? `(${p.reason})` : "";
           appendAgent(`🏁 执行完成,共 ${p?.total ?? 0} 步 ${reason}`);
+          await loadSessions();
           return;
         }
       }
     } catch (e) {
+      finalizeStream();
       appendAgent(`流式执行中断: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
@@ -251,14 +410,13 @@ export default function AgentPage() {
         r.reply ||
           `(意图:${r.intent}${r.skill_name ? ` · skill:${r.skill_name}` : ""})`,
       );
-      // v10.3.1 (P0-2):react 引擎(auto_run=true + session_id)→
-      // 订阅 /run_stream?session_id=…&text=…(text 重放,Critic B-1);
-      // legacy 引擎(plan_steps>0)→ 原 job_id 流。两种契约统一走 autoRunPlan。
+      if (r.session_id) setActiveSessionId(r.session_id);
       if (r.auto_run && r.session_id) {
         await autoRunPlan(jobId, r.session_id, text);
       } else if (r.auto_run && r.plan_steps && r.plan_steps.length > 0) {
         await autoRunPlan(jobId);
       }
+      await loadSessions();
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : String(e);
       appendAgent(`错误: ${msg}`);
@@ -275,6 +433,34 @@ export default function AgentPage() {
           用自然语言指挥 AI。意图解析 → 选 skill → plan → 自动执行工具闭环。走 NVIDIA 多 key 路由。
         </p>
       </header>
+
+      {/* v10.5.0 (P1-9): 会话管理(新建/切换/删除历史) */}
+      <Card className="p-3 flex items-center gap-2 flex-wrap">
+        <Button variant="chip" onClick={startNewSession}>
+          ＋ 新建会话
+        </Button>
+        <select
+          value={activeSessionId}
+          onChange={(e) =>
+            e.target.value ? void openSession(e.target.value) : startNewSession()
+          }
+          className="rounded-card-sm glass-chip px-3 py-2 text-sm text-white max-w-[16rem]"
+          aria-label="历史会话"
+        >
+          <option value="">（未保存会话）</option>
+          {sessions.map((s) => (
+            <option key={s.session_id} value={s.session_id}>
+              {s.session_id.slice(0, 8)} · {s.updated_at?.replace("T", " ") ?? ""}
+            </option>
+          ))}
+        </select>
+        {activeSessionId && (
+          <Button variant="danger" onClick={() => void deleteSession(activeSessionId)}>
+            删除
+          </Button>
+        )}
+        <span className="text-xs text-mute ml-auto">{sessions.length} 个历史会话</span>
+      </Card>
 
       <Card className="p-4">
         <label className="block text-xs text-mute mb-1.5">关联作业(可选,工具调用用)</label>
@@ -341,7 +527,7 @@ export default function AgentPage() {
                 {approval.priority === "dangerous_write" && (
                   <span className="text-danger">⚠️ 危险操作</span>
                 )}
-                审批请求: {APPROVAL_TOOL_CN[approval.tool] || approval.tool}
+                审批请求: {toolCn(approval.tool)}
               </h3>
               <p className="text-xs text-mute mt-0.5">
                 {approval.reason ||
@@ -353,7 +539,10 @@ export default function AgentPage() {
                 {APPROVAL_CONSEQUENCE[approval.tool] ||
                   "该操作会改动本地数据。"}
                 <span className="ml-2 opacity-70">
-                  {approval.timeout}s 内未决定将自动拒绝。
+                  按 Enter 允许 / Esc 拒绝 ·
+                  {remaining > 0
+                    ? ` ${Math.ceil(remaining)}s 后自动拒绝`
+                    : " 等待决定…"}
                 </span>
               </p>
             </div>
@@ -366,20 +555,20 @@ export default function AgentPage() {
           <div className="flex gap-3 mt-4">
             <Button
               variant="primary"
-              onClick={() => decideApproval(true)}
+              onClick={() => void decideApproval(true)}
               disabled={approvalBusy}
             >
               允许本次
             </Button>
             <Button
               variant="danger"
-              onClick={() => decideApproval(false)}
+              onClick={() => void decideApproval(false)}
               disabled={approvalBusy}
             >
               拒绝
             </Button>
             <span className="text-xs text-mute self-center ml-auto">
-              {approvalBusy ? "提交中…" : `${approval.timeout}s 后自动拒绝`}
+              {approvalBusy ? "提交中…" : ""}
             </span>
           </div>
         </Card>
