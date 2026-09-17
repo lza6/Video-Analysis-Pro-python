@@ -147,7 +147,10 @@ async def _bounded_stream(
                 yield item
         return
 
-    # ---- Python 3.10 回退：生产者任务 + 事件队列 ----
+    # ---- Python 3.10 回退：生产者任务 + 整体 deadline 轮询 ----
+    # 注意：不能用 asyncio.wait_for(queue.get(), timeout) —— 3.10 的组合 bug:
+    # wait_for 超时/收尾时会取消内层 get() 任务,若 get 已唤醒但尚未出队,元素
+    # 留在队列里 → 生产者 put_nowait 撞 QueueFull、消费者误判超时(实测复现)。
     queue: "asyncio.Queue" = asyncio.Queue(maxsize=1)
     sentinel = object()
 
@@ -155,26 +158,34 @@ async def _bounded_stream(
         try:
             async for item in agen:
                 await queue.put(item)
-            queue.put_nowait(sentinel)
+            await queue.put(sentinel)  # 阻塞:等消费者腾出空间,防 QueueFull 丢 sentinel
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001 — 生产者异常经队列透传
-            queue.put_nowait(e)
+            await queue.put(e)
 
     task = asyncio.create_task(_produce())
     try:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + sec
         while True:
             try:
-                item = await asyncio.wait_for(queue.get(), timeout=sec)
-            except asyncio.TimeoutError:
-                task.cancel()
-                raise
+                item = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                if loop.time() >= deadline:
+                    task.cancel()
+                    raise asyncio.TimeoutError
+                await asyncio.sleep(0.01)
+                continue
             if item is sentinel:
                 return
             if isinstance(item, BaseException):
                 raise item
             yield item
     finally:
+        if not task.done():
+            task.cancel()
+
         if not task.done():
             task.cancel()
 
