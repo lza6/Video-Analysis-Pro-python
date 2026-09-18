@@ -1,5 +1,15 @@
 # Changelog — TingFeng Hermes
 
+## [10.5.2] — 2026-09-18 · CI E2E 修复（Node 20 + 端口对齐）
+
+### 修复
+- e2e job 的 `setup-node` 从 Node 18 升到 20：当前 Playwright 要求 Node 20+（CI 实测 `Playwright requires Node.js 20 or higher` 直接退出）。
+- e2e job 后端端口从 :8001 改为 :8002，与 `webapp/playwright.config.ts` 的 `baseURL` 对齐——此前端口错位会让全部 Playwright 用例因 `ready=false` 跳过，等于 E2E 没真跑。
+
+### 验证
+- tag 触发完整链路：矩阵 6/6 → e2e（Playwright 真实浏览器 + 真实后端 :8002）→ build-windows（全量测试 + pyinstaller 构建）。
+- v10.5.1 矩阵 6/6 全绿已确认；本版补齐 E2E 与 Windows 构建两级的真实验证。
+
 ## [10.5.1] — 2026-09-18 · CI 历史全红终结 + 跨平台安全/稳定性修复
 
 ### CI 流水线全绿（项目历史首次 6/6 矩阵通过）
