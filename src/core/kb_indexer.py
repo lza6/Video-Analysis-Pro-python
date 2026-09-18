@@ -7,7 +7,10 @@ Phase 1/2 完成后把关键帧写入 ChromaDB 全局 collection（kb_frames）�
 """
 import logging
 import threading
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:  # 仅供类型检查器;运行时惰性导入(见模块头注释)
+    from sentence_transformers import SentenceTransformer
 
 import numpy as np
 
