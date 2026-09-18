@@ -1,5 +1,11 @@
 # Changelog — TingFeng Hermes
 
+## [10.6.1] — 2026-09-19 · E2E 断言修复（Toast 空态 toBeAttached）
+
+- `agent-realtime.spec.ts` 的 Toast 容器断言从 `toBeVisible()` 改为 `toBeAttached()`：
+  Toast 为空时 aria-live 容器是 0 高空 div（正常），CI 实测 toBeVisible 误判不可见。
+- 纯测试断言修复，无功能代码变更。tag v10.6.1 全链路 CI（矩阵 + e2e + build-windows）为目标绿态。
+
 ## [10.6.0] — 2026-09-19 · 小白友好(术语气泡) + 全局交互层前端可靠性 + 审批快捷键/实时流/会话管理已有批次复核
 
 ### P1-1 术语气泡（小白友好）
