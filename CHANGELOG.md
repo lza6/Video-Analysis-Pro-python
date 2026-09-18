@@ -1,5 +1,12 @@
 # Changelog — TingFeng Hermes
 
+## [10.6.2] — 2026-09-19 · gc_guard 并发测试容错(join 预算 10s→60s)
+
+- `test_gc_guard.py::test_concurrent_check_does_not_crash` 在 CI 负载下偶发
+  `assert 99 == 100`：100 次并发 gc.collect() 单帧可达数秒,10s join 预算不够。
+  提到 60s(保持精确计数语义)。纯测试容错,无功能变更。
+- tag v10.6.2 目标:全链路 CI(矩阵 6/6 + 真实 E2E + Windows 构建)确定性全绿。
+
 ## [10.6.1] — 2026-09-19 · E2E 断言修复（Toast 空态 toBeAttached）
 
 - `agent-realtime.spec.ts` 的 Toast 容器断言从 `toBeVisible()` 改为 `toBeAttached()`：
