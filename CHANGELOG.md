@@ -1,5 +1,12 @@
 # Changelog — TingFeng Hermes
 
+## [10.6.3] — 2026-09-19 · tkinter 用例确定性跳过(Tk 可初始化才跑)
+
+- `TestUiComponentsTk` 跳过条件从「仅 Linux 无 DISPLAY」扩为「真实探测 Tk 能否建 root」：
+  Windows runner 偶发缺 tk.tcl 数据(setup 报 TclError),1482 passed + 1 error 的
+  error 由此而来。Tk 不可用的环境直接跳过(UI 对话框用例),可用的环境照常跑。
+- 纯测试容错,无功能变更。tag v10.6.3 目标:全链路 CI 确定性全绿。
+
 ## [10.6.2] — 2026-09-19 · gc_guard 并发测试容错(join 预算 10s→60s)
 
 - `test_gc_guard.py::test_concurrent_check_does_not_crash` 在 CI 负载下偶发
