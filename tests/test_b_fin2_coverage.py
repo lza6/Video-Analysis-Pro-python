@@ -881,8 +881,21 @@ def tk_root():
 
 
 def _tk_headless() -> bool:
-    """Linux 无 DISPLAY 时 Tk 无法建窗(CI 矩阵 ubuntu 报 TclError: no display name)。"""
-    return sys.platform.startswith("linux") and not os.environ.get("DISPLAY")
+    """Tk 不可用时跳过(确定性,避免 CI 环境偶发报错)。
+
+    覆盖两类:Linux 无 DISPLAY(TclError: no display name);Windows runner
+    偶发缺 tk.tcl 数据(实测 v10.6.2 windows 3.10 setup 报 TclError)。
+    通过"真的建一个 root"探测,比猜平台更可靠。
+    """
+    if sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
+        return True
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+        root.destroy()
+        return False
+    except Exception:
+        return True
 
 
 @pytest.mark.skipif(_tk_headless(), reason="headless CI: Tk 需要 DISPLAY")
