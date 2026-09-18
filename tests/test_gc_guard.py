@@ -383,8 +383,10 @@ def test_concurrent_check_does_not_crash() -> None:
     threads = [threading.Thread(target=worker) for _ in range(5)]
     for t in threads:
         t.start()
+    # CI 负载下 100 次并发 gc.collect() 可能很慢(每帧数秒),join 预算给足
+    # 60s,否则线程未跑完就被判超时 → 结果数 < 100(ubuntu 3.11 CI 实测 99)。
     for t in threads:
-        t.join(timeout=10.0)
+        t.join(timeout=60.0)
     assert errors == []
     assert len(results) == 100
     # 全部触发(超阈值)
