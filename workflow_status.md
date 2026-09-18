@@ -1,4 +1,6 @@
-# Workflow Status — v10.5.0 交付闭环（2026-09-18）
+# Workflow Status — v10.5.2 完整交付闭环（2026-09-18）
+
+> **终态：v10.5.2 tag 全链路 CI = SUCCESS（矩阵 6/6 + 真实 E2E + Windows 构建）**
 
 > 本文件是任务单一状态源。上一版(v10.3.1 终态)已被本版取代。
 
@@ -19,7 +21,7 @@
 - P1-10 单步软超时：VAP_AGENT_STEP_TIMEOUT 接线(LLM 流整体超时/工具超时落 Error 继续轮次)
 - P0-B 启动脚本加固：cleanup-stale.js 不再全机杀 Electron(按命令行精确匹配+--dry-run)；
   start-desktop.bat 版本去硬编码
-- tag `v10.5.0` 推送 + GitHub Release 已创建
+- tag `v10.5.0` / `v10.5.1` / `v10.5.2` 推送 + Release 已创建；v10.5.2 为**全链路 CI 绿**的发布版本
 
 ### CI 修复（历史全红 → 绿）
 - 根因1: test/e2e/build 三 job 缺 requirements-web.txt → ModuleNotFoundError: fastapi
