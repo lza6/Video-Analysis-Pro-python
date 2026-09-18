@@ -139,7 +139,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
         title="TingFeng Hermes — Web API",
-        version="10.5.0",
+        version="10.5.1",
         lifespan=lifespan,
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",

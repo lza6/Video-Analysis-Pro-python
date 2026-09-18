@@ -1,5 +1,34 @@
 # Changelog — TingFeng Hermes
 
+## [10.5.1] — 2026-09-18 · CI 历史全红终结 + 跨平台安全/稳定性修复
+
+### CI 流水线全绿（项目历史首次 6/6 矩阵通过）
+根因逐一修复（每项都有 CI 日志实证）：
+1. **缺 Web 依赖**：test/e2e/build 三 job 只装核心依赖 → 收集期 `ModuleNotFoundError: fastapi`（历史全红根因）。
+2. **依赖子集与测试集不匹配**：矩阵跑 tests/ 全目录却只装最小子集 → 改全量 `requirements.txt + requirements-web.txt`。
+3. **ffprobe 缺失**：矩阵 apt/brew/choco 装 ffmpeg（Windows runner 上 bash 语法步骤需 pwsh 版）。
+4. **bash 续行在 pwsh 上 ParserError**：`Run tests` 步骤的 `\` 续行在 Windows 默认 pwsh 语法错误 → 显式 `shell: bash`。
+5. **torch/torchvision 分源不匹配**：CPU index 装 torch 2.14.0+cpu + PyPI torchvision 0.29 → `torchvision::nms` 注册失败 →
+   transformers 惰性导入链报误导性 `Could not import module 'PreTrainedModel'`（macOS 配对一致所以绿）→ 同源安装。
+6. **kb_indexer 急切导入**：模块级 `from sentence_transformers import ...` 拉起整个 transformers 栈（连带 torch/torchvision），
+   假 embedder 测试也被波及 → 改函数内惰性导入 + `TYPE_CHECKING` 守卫。
+7. **`_port_available` 误判**：SO_REUSEADDR 在 Windows 上把 TIME_WAIT/被占端口判为"可用"（launcher 会选到不可用端口）→ 裸 bind 诚实探测。
+8. **pytest-cov 不识别 `--skip-empty`**（coverage.py CLI 参数）→ 移除；覆盖门槛对齐 P0-8 实测基线 77%。
+9. **Windows 测试抖动**：`_hold_port` 独占探测加 TIME_WAIT 收敛重试；cleanup_stale 用例显式拨 finished_at 保证 age>0；
+   模型下载用例桩掉 download_model（预置 1KB 文件后仍 Range 续传真实下载剩余 6.6MB，慢网络 8s 超时）。
+10. **测试隔离**：torch 惰性代理用例复位 `_mod`（全量进程被其他用例污染）；tkinter 用例 Linux 无 DISPLAY 跳过。
+
+### 跨平台安全修复（CI 暴露的真实缺陷）
+- **sanitize 跨平台逃逸**：`Path().name` 在 Linux 不剥反斜杠路径（`C:\evil.mp4` / `..\..\x.mp4` 原样返回）→
+  新增 `secure_basename`（同时剥离 `/` 与 `\`）并应用到 `security.sanitize_upload_filename` 与 `headless.py`；
+  镜像测试改用真实实现防再次漂移。
+- **batch 校验顺序**：空目录校验移到装配 runner 之前（无 nvidia key 时应返回 400「目录无支持的视频文件」而非 500）。
+
+### 验证
+- CI 矩阵 **6/6 全绿**（macos/ubuntu/windows × 3.10/3.11）：1478+ passed/平台 + 覆盖率 ≥77%。
+- 本地：test_models_router 18 / TestFindAvailablePort 3 / cleanup_stale / kb 假 embedder 3 / serve 守卫全绿。
+- Playwright E2E（v10.5.0 已含）：既有 24 + agent-realtime 3 passed。
+
 ## [10.5.0] — 2026-09-18 · 对话体验闭环 + 单步软超时 + 启动脚本安全加固
 
 ### P1-10 单步软超时接线（step_timeout_sec 死配置转正）
