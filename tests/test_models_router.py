@@ -85,6 +85,23 @@ def _start_stream(client, job_id: str, headers=None, timeout: float = 8.0):
     return status, events, raw_lines
 
 
+def _stub_download(monkeypatch, mgr):
+    """把注入的 ModelManager.download_model 换成确定性零网络桩。
+
+    背景(CI 实测):预置 1024B 的 yolo11n.pt 后,download_model 仍会发
+    Range 续传真实下载剩余 ~6.6MB(GitHub 返回 206 而非 416),慢网络下
+    8s 流超时 → macOS 3.10 偶发「缺 verify 事件」。桩实现直接推
+    progress(100) 并返回 True,仍走路由/后台线程/SSE/verify 全链。
+    """
+
+    def _fake_download(model_id: str, progress_callback=None):  # noqa: ARG001
+        if progress_callback:
+            progress_callback(100)
+        return True
+
+    monkeypatch.setattr(mgr, "download_model", _fake_download)
+
+
 # ============================ GET /api/models ============================
 
 def test_list_models_returns_cards(module_app, models_mgr):
@@ -142,7 +159,7 @@ def test_download_unknown_id_400(module_app):
     assert "unknown model_id" in (detail.get("error", "") if isinstance(detail, dict) else str(detail))
 
 
-def test_download_creates_job_and_streams(module_app, models_mgr):
+def test_download_creates_job_and_streams(module_app, models_mgr, monkeypatch):
     """启动下载 → job 创建 → SSE 流 push 事件(含 verify 成功,不真实下载)。
 
     download_model 对 yolo_v11n 走"已存在则复用"逻辑:models_dir 预置
@@ -150,8 +167,9 @@ def test_download_creates_job_and_streams(module_app, models_mgr):
     verify/done/__close__ 事件。
     """
     mgr, _tmp = models_mgr
-    # 预置目标文件:让 download_model 的"目标已存在"分支直接 return True(零网络)
+    # 预置目标文件 + 桩掉 download_model:确定性零网络(见 _stub_download)
     (mgr.models_dir / "yolo11n.pt").write_bytes(b"\x00" * 1024)
+    _stub_download(monkeypatch, mgr)
 
     r = module_app.post("/api/models/yolo_v11n/download")
     assert r.status_code == 201, r.text
@@ -174,10 +192,11 @@ def test_download_stream_404_no_active(module_app):
     assert r.status_code == 404, r.text
 
 
-def test_download_stream_replay_last_event_id(module_app, models_mgr):
+def test_download_stream_replay_last_event_id(module_app, models_mgr, monkeypatch):
     """Last-Event-ID 断线续连:重放 seq > id 的历史事件(verify/done)。"""
     mgr, _tmp = models_mgr
     (mgr.models_dir / "yolo11n.pt").write_bytes(b"\x00" * 1024)
+    _stub_download(monkeypatch, mgr)
     module_app.post("/api/models/yolo_v11n/download")
     _start_stream(module_app, "yolo_v11n")  # 先消费完 live 流,事件落入环形缓冲
 

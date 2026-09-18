@@ -50,18 +50,17 @@ jobs:
           PYTHONIOENCODING: utf-8
         run: python scripts/check_wiring.py --check wiring,version,docs
       - name: Run tests
+        shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
           PYTHONIOENCODING: utf-8
         run: |
+          # 完整套件需要全量依赖(已由 Install deps (full) 装齐)。
+          # 覆盖门槛对齐 P0-8 实测基线 77%;覆盖率提升工作(P2-8)落地后再上调。
           python -m pytest tests/ -q \
             --ignore=tests/test_headless_server.py \
             --ignore=tests/test_e2e_smoke.py \
             --cov=src --cov-report=term-missing --cov-fail-under=77
-          # 覆盖门槛对齐 P0-8 实测基线 77%(旧 80% 导致 CI 恒红);覆盖率提升工作(P2-8)落地后再上调
-          # 完整套件需要全量依赖 (ultralytics/faster-whisper 等)，这里跑可独立运行的子集；
-          # 全量验证在打包 job 中执行。
-          # v10.1.0: 去 `|| true`,CI 真实失败阻断 + 加覆盖率门禁 ≥80%。
 
   e2e:
     needs: test
