@@ -25,7 +25,9 @@ def _port_available(host: str, port: int) -> bool:
     """检查端口是否可绑定。127.0.0.1 与 0.0.0.0 语义不同,统一试绑定。"""
     probe_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # 注意:不得设 SO_REUSEADDR —— Windows 上它允许绑定 TIME_WAIT/被占
+        # 端口(误判"可用"),launcher 会选到实际上不可用的端口(CI 实测)。
+        # 裸 bind 才是诚实的可用性探测。
         try:
             s.bind((probe_host, port))
             return True

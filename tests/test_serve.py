@@ -214,8 +214,9 @@ class TestFindAvailablePort:
                 try:
                     s, _ = _hold_port(base + offset)
                     holders.append(s)
-                except OSError:
-                    # 该端口已被占,跳过(最终全部不可用即符合"全占"语义)
+                except (OSError, RuntimeError):
+                    # 该端口已被占/TIME_WAIT 未收敛,跳过 —— 语义上仍"不可用",
+                    # 符合"全部不可用 → find 返回 0"的断言意图
                     continue
 
             from src.web.serve import _find_available_port
