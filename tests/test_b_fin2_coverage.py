@@ -1392,6 +1392,10 @@ class TestJobStoreEdges:
         s2 = JobStore()
         r = s2.create("v.mp4", tmp_path / "w2", tmp_path / "w2" / "frames")
         r.status = JobStatus.DONE
+        # 显式把 finished_at 拨到 1s 前:max_age_sec=0 语义是"age>0 即超龄",
+        # 同秒时钟粒度下 age 可能恰为 0.0 → 不清理(Windows CI 实测抖动)。
+        import time as _time
+        r.finished_at = _time.time() - 1.0
         assert s2.cleanup_stale(max_age_sec=0) == 1
         assert s2.get(r.job_id) is None
 

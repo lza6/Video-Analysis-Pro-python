@@ -64,19 +64,24 @@ def _hold_port(port: int | None = None) -> tuple[socket.socket, int]:
     from src.web.serve import _port_available
 
     def _try_hold(p: int) -> socket.socket | None:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        try:
-            s.bind(("127.0.0.1", p))
-            s.listen(1)
-        except OSError:
+        # Windows TIME_WAIT 抖动:独占探测偶发秒级收敛慢(bind+listen 后
+        # _port_available 仍短暂可见可绑),重试几次再判失败(CI 3.10 实测)。
+        import time as _t
+        for _attempt in range(4):
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            try:
+                s.bind(("127.0.0.1", p))
+                s.listen(1)
+            except OSError:
+                s.close()
+                return None
+            if not _port_available("127.0.0.1", p):
+                return s
             s.close()
-            return None
-        if _port_available("127.0.0.1", p):
-            s.close()
-            return None
-        return s
+            _t.sleep(0.15)
+        return None
 
     if port is not None:
         s = _try_hold(port)
