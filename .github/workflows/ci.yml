@@ -32,11 +32,12 @@ jobs:
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements.txt -r requirements-web.txt
       - name: Install ffmpeg (matrix)
-        shell: bash
+        # 全平台统一用 pwsh(Windows runner 用 bash 语法会 ParserError,实测)
+        shell: pwsh
         run: |
-          if [ "$RUNNER_OS" == "Linux" ]; then sudo apt-get update && sudo apt-get install -y ffmpeg; fi
-          if [ "$RUNNER_OS" == "macOS" ]; then brew install ffmpeg; fi
-          if [ "$RUNNER_OS" == "Windows" ]; then command -v ffprobe || choco install ffmpeg -y --no-progress; fi
+          if ($env:RUNNER_OS -eq 'Linux') { sudo apt-get update; sudo apt-get install -y ffmpeg }
+          if ($env:RUNNER_OS -eq 'macOS') { brew install ffmpeg }
+          if ($env:RUNNER_OS -eq 'Windows') { if (-not (Get-Command ffprobe -ErrorAction SilentlyContinue)) { choco install ffmpeg -y --no-progress } }
       - name: Static check (ruff)
         run: |
           pip install ruff
