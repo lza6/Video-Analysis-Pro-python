@@ -65,7 +65,8 @@ test.describe("/agent 实时流与会话管理", () => {
     await page.goto("/agent/");
     // 术语气泡:<abbr title> 悬浮解释(P1-1)
     await expect(page.locator("abbr[title]").first()).toBeVisible();
-    // 全局 Toast 容器(aria-live,P1-6)
-    await expect(page.locator('[aria-live="polite"]').first()).toBeVisible();
+    // 全局 Toast 容器(aria-live,P1-6)。空态时容器高度为 0,用 toBeAttached
+    // 断言 DOM 存在(无障碍语义靠 aria-live + 内容出现时可见),不能 toBeVisible。
+    await expect(page.locator('[aria-live="polite"]').first()).toBeAttached();
   });
 });
