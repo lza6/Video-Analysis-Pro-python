@@ -59,4 +59,13 @@ test.describe("/agent 实时流与会话管理", () => {
     // 弹窗需要真实写工具触发,这里只验证无弹窗时不炸 + 页面正常
     await expect(page.getByPlaceholder("问我任何关于视频的问题…")).toBeVisible();
   });
+
+  test("P1-1 术语气泡与 P1-6 Toast 容器可见", async ({ page }) => {
+    test.skip(!ready, "后端 /api/health 不可达,跳过");
+    await page.goto("/agent/");
+    // 术语气泡:<abbr title> 悬浮解释(P1-1)
+    await expect(page.locator("abbr[title]").first()).toBeVisible();
+    // 全局 Toast 容器(aria-live,P1-6)
+    await expect(page.locator('[aria-live="polite"]').first()).toBeVisible();
+  });
 });

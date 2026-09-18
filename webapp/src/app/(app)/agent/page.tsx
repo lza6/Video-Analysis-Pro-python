@@ -14,6 +14,8 @@ import {
 } from "@/lib/approvalMaps";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { GlossaryText } from "@/components/ui/GlossaryTerm";
+import { useToast } from "@/components/ui/Toast";
 
 interface Msg {
   role: "user" | "agent";
@@ -89,6 +91,7 @@ export default function AgentPage() {
   // v10.5.0 (P1-9): 会话管理
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [activeSessionId, setActiveSessionId] = useState("");
+  const { toast } = useToast();
 
   // v10.5.0 (P1-7): 流式打字机——当前正在追加的 agent 消息下标
   const streamRef = useRef<number | null>(null);
@@ -208,6 +211,7 @@ export default function AgentPage() {
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : String(e);
       appendAgent(`⚠️ 审批回调失败: ${msg}`);
+      toast(`审批回调失败: ${msg}`, "error");
     } finally {
       setApprovalBusy(false);
       setApproval(null);
@@ -420,6 +424,7 @@ export default function AgentPage() {
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : String(e);
       appendAgent(`错误: ${msg}`);
+      toast(msg, "error");
     } finally {
       setBusy(false);
     }
@@ -430,7 +435,7 @@ export default function AgentPage() {
       <header>
         <h1 className="text-3xl font-black tracking-tight text-white">Agent 对话</h1>
         <p className="text-sm text-mute mt-1.5">
-          用自然语言指挥 AI。意图解析 → 选 skill → plan → 自动执行工具闭环。走 NVIDIA 多 key 路由。
+          用自然语言指挥 AI。意图解析 → 选 <GlossaryText text="skill" /> → plan → 自动执行工具闭环。<GlossaryText text="写操作需审批,会话可续接。" />
         </p>
       </header>
 

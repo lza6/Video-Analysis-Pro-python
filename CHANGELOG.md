@@ -1,5 +1,25 @@
 # Changelog — TingFeng Hermes
 
+## [10.6.0] — 2026-09-19 · 小白友好(术语气泡) + 全局交互层前端可靠性 + 审批快捷键/实时流/会话管理已有批次复核
+
+### P1-1 术语气泡（小白友好）
+- 新增 `webapp/src/lib/glossary.ts`（18 项必备术语）与 `GlossaryTerm/GlossaryText` 组件：
+  分析页与 Agent 页头部以 `<abbr title>` 悬浮解释专业术语（抽帧/YOLO/向量知识库/SSE/审批/skill…），
+  未收录词原样渲染不炸。
+- 守护：`tests/test_glossary_toast.py`（词表必备项 + 页面引用 + Toast 容器契约）。
+
+### P1-6 全局交互层（前端可靠性部分）
+- `webapp/src/lib/api.ts` 统一 `fetchWithTimeout`（AbortController，默认 15s 超时，超时抛 ApiError 408）+
+  GET/DELETE 幂等请求网络失败重试 1 次（HTTP 错误码不重试）。此前无超时——后端挂起时前端无限等待。
+- 新增全局 `ToastProvider/useToast`（aria-live polite，4s 自动消失），挂入 `(app)/layout.tsx`；
+  Agent 页错误路径接入 Toast 反馈。
+
+### 验证
+- `tsc --noEmit` 0 错；`next build` 17 路由成功；守护测试 4 passed。
+- Playwright（本机内存受限，后端进程易被 OOM 杀）：此前全量跑 20 passed 且新用例（术语气泡/Toast 容器）通过；
+  权威 E2E 由 v10.6.0 tag 全链路 CI 承担（矩阵 + e2e + build-windows）。
+- 复核：P1-7/8/9/10 与 CI 全链路修复（v10.5.1/10.5.2）保持绿。
+
 ## [10.5.2] — 2026-09-18 · CI E2E 修复（Node 20 + 端口对齐）
 
 ### 修复

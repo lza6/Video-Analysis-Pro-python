@@ -9,6 +9,7 @@ import { ReportView } from "@/components/analyze/ReportView";
 import { LogConsole } from "@/components/analyze/LogConsole";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { GlossaryText } from "@/components/ui/GlossaryTerm";
 import { useAnalyzeJob } from "@/hooks/useAnalyzeJob";
 import type { AnalyzeConfig } from "@/lib/types";
 
@@ -51,6 +52,9 @@ export default function AnalyzePage() {
         </h1>
         <p className="text-sm text-mute mt-1.5">
           三阶段流水线:数据提取 → AI 分析 → 生成报告。全程本地运行,隐私不出本机。
+        </p>
+        <p className="text-xs text-mute/70 mt-1">
+          <GlossaryText text="支持:智能抽帧(运动检测)、Whisper 转录、YOLO 物体检测、CLIP 向量知识库语义搜索、RTSP 实时监控。" />
         </p>
       </header>
 

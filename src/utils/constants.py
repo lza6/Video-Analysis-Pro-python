@@ -3,7 +3,7 @@ import sys
 
 # Application Info
 APP_NAME = "TingFeng Hermes"
-APP_VERSION = "10.5.2"
+APP_VERSION = "10.6.0"
 
 # Environment
 VENV_SUBDIR_NAME = "venv"
