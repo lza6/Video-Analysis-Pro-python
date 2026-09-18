@@ -26,7 +26,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pytest pytest-cov
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          # torch 与 torchvision 必须同源安装:分源会让 torch 2.14.0+cpu 与 PyPI
+          # torchvision 0.29 配对不一致,ultralytics 触发 torchvision::nms 注册失败
+          # → transformers 惰性导入报 'Could not import module PreTrainedModel'(CI 实测)
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements.txt -r requirements-web.txt
       - name: Install ffmpeg (matrix)
         shell: bash

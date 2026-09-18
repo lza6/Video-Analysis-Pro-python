@@ -13,9 +13,11 @@ import numpy as np
 
 from src.core.logic import CLIP_AVAILABLE
 
-if CLIP_AVAILABLE:
-    from sentence_transformers import SentenceTransformer
-
+# v10.5.0: sentence_transformers 改为函数内惰性导入。此前模块级
+# `if CLIP_AVAILABLE: from sentence_transformers import ...` 会在任何
+# import kb_indexer 时急切拉起整个 transformers 栈(连带 torch/torchvision)——
+# 与 logic.py(P0-6)同一哲学:只探测不绑定,首次真实使用才加载。
+# 好处:用假 embedder 的测试/未装 ST 的环境,import kb_indexer 不再可能炸。
 logger = logging.getLogger("VideoAnalyzerCore")
 
 _shared_embedder: Optional["SentenceTransformer"] = None
@@ -35,6 +37,7 @@ def get_embedder() -> Optional["SentenceTransformer"]:
         with _embedder_lock:
             if _shared_embedder is None:  # double-check under lock
                 try:
+                    from sentence_transformers import SentenceTransformer  # 惰性(见模块头注释)
                     logger.info("KB indexer: loading clip-ViT-B-32 embedder...")
                     _shared_embedder = SentenceTransformer('clip-ViT-B-32')
                 except Exception as e:
